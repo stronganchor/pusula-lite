@@ -93,7 +93,7 @@ class CustomerSearchWindow(tk.Toplevel):
                 .all()
             )
             for r in rows:
-                self.tree.insert("", "end", values=r)
+                self.tree.insert("", "end", values=tuple(r))
 
     def on_filter_change(self, *_args) -> None:
         """Filter rows in memory (simple case-insensitive substring match)."""
@@ -120,7 +120,7 @@ class CustomerSearchWindow(tk.Toplevel):
                 .all()
             )
             for r in rows:
-                self.tree.insert("", "end", values=r)
+                self.tree.insert("", "end", values=tuple(r))
 
     # ------------------------------------------------------------------ #
     #  Selection event                                                   #
