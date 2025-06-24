@@ -50,13 +50,15 @@ class AddCustomerFrame(ttk.Frame):
 
         # --- Adı Soyadı + Telefon ---
         ttk.Label(self, text="Adı Soyadı *").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.var_name, width=40)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.var_name, width=40).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.var_phone, width=25)\
-            .grid(row=row, column=1, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.var_phone, width=25).grid(
+            row=row, column=1, sticky="w", **pad
+        )
         row += 1
 
         ttk.Separator(self, orient="horizontal")\
@@ -65,18 +67,21 @@ class AddCustomerFrame(ttk.Frame):
 
         # --- Ev / İş Adresi + Özel Notu ---
         ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_address, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.var_address, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_work_address, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.var_work_address, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         ttk.Label(self, text="Özel Notu").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_notes, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.var_notes, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         ttk.Separator(self, orient="horizontal")\
@@ -87,20 +92,24 @@ class AddCustomerFrame(ttk.Frame):
         ttk.Label(self, text="Ek Kişi 1").grid(row=row, column=0, sticky="w", **pad)
         row += 1
         ttk.Label(self, text="Adı Soyadı").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_name, width=30)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c1_name, width=30).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_phone, width=25)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c1_phone, width=25).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_home, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c1_home, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_work, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c1_work, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         ttk.Separator(self, orient="horizontal")\
@@ -111,48 +120,61 @@ class AddCustomerFrame(ttk.Frame):
         ttk.Label(self, text="Ek Kişi 2").grid(row=row, column=0, sticky="w", **pad)
         row += 1
         ttk.Label(self, text="Adı Soyadı").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_name, width=30)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c2_name, width=30).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_phone, width=25)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c2_phone, width=25).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_home, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c2_home, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
         ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_work, width=60)\
-            .grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Entry(self, textvariable=self.c2_work, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
         row += 1
 
         # --- Action buttons ---
-        ttk.Button(self, text="Kaydet (F10)", command=self.save)\
-            .grid(row=row, column=2, sticky="e", **pad)
-        ttk.Button(self, text="Vazgeç", command=self.clear_all)\
-            .grid(row=row, column=3, sticky="w", **pad)
-
-        # F10 → save
+        ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
+            row=row, column=2, sticky="e", **pad
+        )
+        ttk.Button(self, text="Vazgeç", command=self.clear_all).grid(
+            row=row, column=3, sticky="w", **pad
+        )
         self.bind_all("<F10>", lambda e: self.save())
 
-        # Populate defaults for a "new" customer
+        # Initialize as “new customer”
         self._new_customer_defaults()
 
 
     def _new_customer_defaults(self) -> None:
-        """Set var_id to next consecutive ID and date to today."""
+        """Set up the next ID + today’s date as defaults (and remember them)."""
         with db.session() as s:
             last = s.query(func.max(db.Customer.id)).scalar() or 0
-        self.var_id.set(str(last + 1))
-        self.var_reg_date.set(date.today().strftime("%Y-%m-%d"))
+        self._default_id   = str(last + 1)
+        self._default_date = date.today().strftime("%Y-%m-%d")
+
+        self.var_id.set(self._default_id)
+        self.var_reg_date.set(self._default_date)
 
 
     def load_customer(self) -> None:
-        """Load existing customer when you tab away from Müşteri No."""
+        """Load an existing customer when you tab away from Müşteri No."""
         raw = self.var_id.get().strip()
+
+        # If ID is the untouched default and no name typed yet, skip lookup
+        if raw == getattr(self, "_default_id", None) and not self.var_name.get().strip():
+            return
+
         if not raw.isdigit():
             return
+
         cid = int(raw)
         with db.session() as s:
             cust = s.get(db.Customer, cid)
@@ -160,9 +182,9 @@ class AddCustomerFrame(ttk.Frame):
                 messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
                 return
 
-            # Populate header + main
+            # Populate header + main fields
             self.var_reg_date.set(cust.registration_date.strftime("%Y-%m-%d"))
-            self.var_name.set(cust.name)
+            self.var_name.set(cust.name or "")
             self.var_phone.set(cust.phone or "")
             self.var_address.set(cust.address or "")
             self.var_work_address.set(cust.work_address or "")
@@ -177,6 +199,7 @@ class AddCustomerFrame(ttk.Frame):
                  .all()
             )
 
+        # Fill Ek Kişi slots
         for slot, vars in enumerate([
             (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
             (self.c2_name, self.c2_phone, self.c2_home, self.c2_work),
@@ -196,7 +219,7 @@ class AddCustomerFrame(ttk.Frame):
 
 
     def save(self) -> None:
-        """Insert or update customer + exactly two contacts."""
+        """Insert a new customer or update an existing one, plus two contacts."""
         name = self.var_name.get().strip()
         if not name:
             messagebox.showwarning("Eksik Bilgi", "Adı Soyadı zorunludur.")
@@ -206,21 +229,18 @@ class AddCustomerFrame(ttk.Frame):
         cid = int(raw) if raw.isdigit() else None
 
         with db.session() as s:
-            # Determine create vs update
-            if cid:
-                cust = s.get(db.Customer, cid)
-            else:
-                cust = None
+            # Try to fetch existing
+            cust = s.get(db.Customer, cid) if cid else None
 
             if cust:
-                # update
-                cust.name             = name
-                cust.phone            = self.var_phone.get().strip()
-                cust.address          = self.var_address.get().strip()
-                cust.work_address     = self.var_work_address.get().strip()
-                cust.notes            = self.var_notes.get().strip()
+                # Update existing
+                cust.name           = name
+                cust.phone          = self.var_phone.get().strip()
+                cust.address        = self.var_address.get().strip()
+                cust.work_address   = self.var_work_address.get().strip()
+                cust.notes          = self.var_notes.get().strip()
             else:
-                # new
+                # Create new
                 today = date.today()
                 cust = db.Customer(
                     id=cid,
@@ -232,18 +252,18 @@ class AddCustomerFrame(ttk.Frame):
                     registration_date=today,
                 )
                 s.add(cust)
-                s.flush()  # get auto‐ID if cid was None
+                s.flush()
                 cid = cust.id
                 self.var_id.set(str(cid))
                 self.var_reg_date.set(cust.registration_date.strftime("%Y-%m-%d"))
 
-            # replace contacts
+            # Replace both contacts
             s.query(db.Contact).filter_by(customer_id=cid).delete()
             for vars in [
                 (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
                 (self.c2_name, self.c2_phone, self.c2_home, self.c2_work),
             ]:
-                nm, ph, hm, wk = [v.get().strip() for v in vars]
+                nm, ph, hm, wk = (v.get().strip() for v in vars)
                 if nm or ph or hm or wk:
                     s.add(db.Contact(
                         customer_id=cid,
@@ -258,7 +278,7 @@ class AddCustomerFrame(ttk.Frame):
 
 
     def clear_all(self) -> None:
-        """Wipe all fields and reset to “new” defaults."""
+        """Reset every field and restore the new-customer defaults."""
         for var in [
             self.var_id, self.var_reg_date,
             self.var_name, self.var_phone,
