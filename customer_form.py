@@ -15,27 +15,29 @@ class AddCustomerWindow(tk.Toplevel):
     def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master)
         self.title("Yeni Müşteri")
-        self.grab_set()            # make window modal
+        self.grab_set()
         self.resizable(False, False)
 
         # ---------------------------------------------------------------- #
-        #  Variables                                                      #
+        #  Variables                                                       #
         # ---------------------------------------------------------------- #
         self.var_name = tk.StringVar()
         self.var_phone = tk.StringVar()
-        self.var_address = tk.StringVar()
+        self.var_address = tk.StringVar()       # Ev adresi
+        self.var_work_address = tk.StringVar()  # İş adresi
         self.var_notes = tk.StringVar()
 
-        # Contacts will be stored as list[tuple[str, str]]
-        self.contacts: list[tuple[str, str]] = []
+        # Each contact: (name, phone, home_address, work_address)
+        self.contacts: list[tuple[str, str, str, str]] = []
 
         # ---------------------------------------------------------------- #
-        #  Layout                                                          #
+        #  Layout – mirrors legacy form                                    #
         # ---------------------------------------------------------------- #
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        ttk.Label(self, text="İsim *").grid(row=row, column=0, sticky="e", **pad)
+        # --- Main customer fields --------------------------------------- #
+        ttk.Label(self, text="Adı Soyadı *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_name, width=40).grid(
             row=row, column=1, columnspan=3, sticky="w", **pad
         )
@@ -47,8 +49,19 @@ class AddCustomerWindow(tk.Toplevel):
         )
         row += 1
 
-        ttk.Label(self, text="Adres").grid(row=row, column=0, sticky="ne", **pad)
+        ttk.Separator(self, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", **pad
+        )
+        row += 1
+
+        ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="ne", **pad)
         ttk.Entry(self, textvariable=self.var_address, width=60).grid(
+            row=row, column=1, columnspan=3, sticky="w", **pad
+        )
+        row += 1
+
+        ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="ne", **pad)
+        ttk.Entry(self, textvariable=self.var_work_address, width=60).grid(
             row=row, column=1, columnspan=3, sticky="w", **pad
         )
         row += 1
@@ -59,31 +72,55 @@ class AddCustomerWindow(tk.Toplevel):
         )
         row += 1
 
-        # --- Alternate contacts ---------------------------------------- #
-        ttk.Label(self, text="Ek Kişiler").grid(row=row, column=0, sticky="ne", **pad)
+        # --- Alternate contacts ------------------------------------------ #
+        ttk.Separator(self, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", **pad
+        )
+        row += 1
 
-        frm_contacts = ttk.Frame(self)
-        frm_contacts.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Label(self, text="Ek Kişiler (Kefil / Diğer)").grid(
+            row=row, column=0, sticky="ne", **pad
+        )
+        frm = ttk.Frame(self)
+        frm.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
 
+        # Contact fields
         self.contact_name = tk.StringVar()
         self.contact_phone = tk.StringVar()
+        self.contact_home = tk.StringVar()
+        self.contact_work = tk.StringVar()
 
-        ttk.Entry(frm_contacts, textvariable=self.contact_name, width=25).grid(
-            row=0, column=0, **pad
+        # Row 0: Name
+        ttk.Label(frm, text="Adı Soyadı").grid(row=0, column=0, sticky="e", **pad)
+        ttk.Entry(frm, textvariable=self.contact_name, width=25).grid(
+            row=0, column=1, columnspan=3, sticky="w", **pad
         )
-        ttk.Entry(frm_contacts, textvariable=self.contact_phone, width=20).grid(
-            row=0, column=1, **pad
+        # Row 1: Phone
+        ttk.Label(frm, text="Telefon").grid(row=1, column=0, sticky="e", **pad)
+        ttk.Entry(frm, textvariable=self.contact_phone, width=25).grid(
+            row=1, column=1, columnspan=3, sticky="w", **pad
         )
-        ttk.Button(
-            frm_contacts, text="Kişi Ekle", command=self.add_contact
-        ).grid(row=0, column=2, **pad)
+        # Row 2: Home Address
+        ttk.Label(frm, text="Ev Adresi").grid(row=2, column=0, sticky="e", **pad)
+        ttk.Entry(frm, textvariable=self.contact_home, width=50).grid(
+            row=2, column=1, columnspan=3, sticky="w", **pad
+        )
+        # Row 3: Work Address + Button
+        ttk.Label(frm, text="İş Adresi").grid(row=3, column=0, sticky="e", **pad)
+        ttk.Entry(frm, textvariable=self.contact_work, width=50).grid(
+            row=3, column=1, columnspan=2, sticky="w", **pad
+        )
+        ttk.Button(frm, text="Kişi Ekle", command=self.add_contact).grid(
+            row=3, column=3, sticky="w", **pad
+        )
 
-        self.list_contacts = tk.Listbox(frm_contacts, height=4, width=50)
-        self.list_contacts.grid(row=1, column=0, columnspan=3, sticky="w", **pad)
+        # Row 4: List of added contacts
+        self.list_contacts = tk.Listbox(frm, height=4, width=70)
+        self.list_contacts.grid(row=4, column=0, columnspan=4, sticky="w", **pad)
 
         row += 1
 
-        # --- Action buttons -------------------------------------------- #
+        # --- Action buttons ---------------------------------------------- #
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=2, sticky="e", **pad
         )
@@ -91,31 +128,34 @@ class AddCustomerWindow(tk.Toplevel):
             row=row, column=3, sticky="w", **pad
         )
 
-        # Allow F10 to trigger save
         self.bind("<F10>", lambda *_: self.save())
 
     # ------------------------------------------------------------------ #
-    #  Contact handling                                                  #
-    # ------------------------------------------------------------------ #
     def add_contact(self) -> None:
-        """Add the current contact entry fields to the listbox + memory."""
+        """Add current contact fields to list + memory."""
         name = self.contact_name.get().strip()
-        phone = self.contact_phone.get().strip()
-        if not name and not phone:
+        if not name:
             return
-        self.contacts.append((name, phone))
-        self.list_contacts.insert(tk.END, f"{name} — {phone}")
+        phone = self.contact_phone.get().strip()
+        home = self.contact_home.get().strip()
+        work = self.contact_work.get().strip()
+
+        self.contacts.append((name, phone, home, work))
+        preview = f"{name} — {phone}"
+        self.list_contacts.insert(tk.END, preview)
+
+        # Clear
         self.contact_name.set("")
         self.contact_phone.set("")
+        self.contact_home.set("")
+        self.contact_work.set("")
 
     # ------------------------------------------------------------------ #
-    #  Save routine                                                      #
-    # ------------------------------------------------------------------ #
     def save(self) -> None:
-        """Validate and persist the customer + contacts."""
+        """Persist customer + contacts."""
         name = self.var_name.get().strip()
         if not name:
-            messagebox.showwarning("Eksik Bilgi", "İsim zorunludur.")
+            messagebox.showwarning("Eksik Bilgi", "Adı Soyadı zorunludur.")
             return
 
         with db.session() as s:
@@ -123,16 +163,19 @@ class AddCustomerWindow(tk.Toplevel):
                 name=name,
                 phone=self.var_phone.get().strip(),
                 address=self.var_address.get().strip(),
+                work_address=self.var_work_address.get().strip(),
                 notes=self.var_notes.get().strip(),
             )
             s.add(customer)
-            s.flush()  # get generated ID for FK
+            s.flush()
 
-            for cname, cphone in self.contacts:
+            for cname, cphone, chome, cwork in self.contacts:
                 contact = db.Contact(
                     customer_id=customer.id,
                     name=cname,
                     phone=cphone,
+                    home_address=chome,
+                    work_address=cwork,
                 )
                 s.add(contact)
 
