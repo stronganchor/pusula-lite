@@ -61,61 +61,54 @@ class CustomerDetailFrame(ttk.Frame):
             self.tree.column(col, width=w, anchor="center")
 
         self.tree.grid(row=row, column=0, columnspan=3, sticky="nsew", **pad)
-        # allow expansion
         self.columnconfigure(2, weight=1)
         self.rowconfigure(row, weight=1)
 
         # On init, load last‐selected or newest
         self.load_customer()
 
-    def load_customer(self, event=None, cid: int | None = None) -> None:
-        """Load data for the given customer ID, or if none typed, fallback."""
+    def load_customer(self, event=None) -> None:
+        """Load data for typed or last‐selected customer."""
         raw = self.var_id.get().strip()
-
-        # If user typed an ID, use it:
         if raw.isdigit():
             cust_id = int(raw)
         else:
-            # Otherwise if called with explicit cid, use it
-            if cid is not None:
-                cust_id = cid
-            else:
-                # Fallback to last-selected
-                cust_id = app_state.last_customer_id
-                # Or newest in DB if still None
-                if cust_id is None:
-                    with db.session() as s:
-                        rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                        cust_id = rec[0] if rec else None
+            cust_id = app_state.last_customer_id
+            if cust_id is None:
+                with db.session() as s:
+                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
+                    cust_id = rec[0] if rec else None
 
         if cust_id is None:
             return
 
+        # Fetch inside session, copy before commit
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
                 messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
                 return
-
-            # Populate header
-            self.var_id.set(str(cust.id))
-            self.var_name.set(cust.name or "")
-            self.var_phone.set(cust.phone or "")
-            self.var_address.set(cust.address or "")
-            app_state.last_customer_id = cust.id
-
-            # Populate sales
-            self.tree.delete(*self.tree.get_children())
-            rows = (
+            name = cust.name or ""
+            phone = cust.phone or ""
+            addr = cust.address or ""
+            # Query sales
+            sales = (
                 s.query(db.Sale.id, db.Sale.date, db.Sale.total)
-                .filter_by(customer_id=cust.id)
-                .order_by(db.Sale.date)
-                .all()
+                 .filter_by(customer_id=cust.id)
+                 .order_by(db.Sale.date)
+                 .all()
             )
 
-        for sid, dt_, tot in rows:
+        # Update header + global state
+        self.var_id.set(str(cust_id))
+        self.var_name.set(name)
+        self.var_phone.set(phone)
+        self.var_address.set(addr)
+        app_state.last_customer_id = cust_id
+
+        # Populate sales table
+        self.tree.delete(*self.tree.get_children())
+        for sid, dt_, tot in sales:
             self.tree.insert(
-                "",
-                "end",
-                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}"),
+                "", "end", values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}")
             )
