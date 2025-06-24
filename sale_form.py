@@ -31,16 +31,12 @@ class SaleFrame(ttk.Frame):
         row = 0
 
         # --- Customer selector via ID entry + name label ---
-        ttk.Label(self, text="Müşteri No *").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Müşteri No *").grid(row=row, column=0, sticky="e", **pad)
         ent_id = ttk.Entry(self, textvariable=self.var_customer_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
-        ent_id.bind("<FocusOut>", lambda e: self.load_customer())
+        ent_id.bind("<FocusOut>", self.load_customer)
 
-        ttk.Label(self, text="Adı Soyadı:").grid(
-            row=row, column=2, sticky="e", **pad
-        )
+        ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=2, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_customer_name).grid(
             row=row, column=3, sticky="w", **pad
         )
@@ -64,9 +60,7 @@ class SaleFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Label(self, text="Peşinat").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Peşinat").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_down, width=15).grid(
             row=row, column=1, sticky="w", **pad
         )
@@ -89,42 +83,48 @@ class SaleFrame(ttk.Frame):
         )
         self.bind_all("<F10>", lambda e: self.save())
 
-        # On init, auto-load the last-selected or most recent customer
+        # On init, load with last‐selected or most‐recent
         self.load_customer()
 
-
-    def load_customer(self, cid: int | None = None) -> None:
-        """Load the customer by ID (or last-selected / newest if None)."""
-        # Determine which ID to load
-        if cid is None:
+    def load_customer(self, event=None) -> None:
+        """Load customer based on entry, or fallback to last/newest."""
+        raw = self.var_customer_id.get().strip()
+        # If the user typed a number, use it:
+        if raw.isdigit():
+            cid = int(raw)
+        else:
+            # Otherwise fallback to last-selected
             cid = app_state.last_customer_id
+            # If still None, use the newest in DB
+            if cid is None:
+                with db.session() as s:
+                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
+                    cid = rec[0] if rec else None
         if cid is None:
-            with db.session() as s:
-                rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                cid = rec[0] if rec else None
-        if cid is None:
+            self.var_customer_name.set("(seçilmedi)")
             return
 
-        # Fetch and display
-        self.var_customer_id.set(str(cid))
+        # Fetch from DB
         with db.session() as s:
             cust = s.get(db.Customer, cid)
-            if not cust:
-                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
-                self.var_customer_name.set("(seçilmedi)")
-                return
-            self.var_customer_name.set(cust.name)
+        if not cust:
+            messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
+            self.var_customer_name.set("(seçilmedi)")
+            return
 
+        # Update display + global state
+        self.var_customer_id.set(str(cust.id))
+        self.var_customer_name.set(cust.name)
+        app_state.last_customer_id = cust.id
 
     def save(self) -> None:
-        """Validate fields, persist sale + instalments, and update last-customer."""
+        """Validate fields, write sale + instalments, update last-customer."""
         # Validate customer ID
         raw = self.var_customer_id.get().strip()
         if not raw.isdigit():
             messagebox.showwarning("Eksik Bilgi", "Geçerli müşteri numarası giriniz.")
             return
         cust_id = int(raw)
-
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
         if not cust:
@@ -151,7 +151,7 @@ class SaleFrame(ttk.Frame):
             messagebox.showwarning("Hatalı Giriş", "Tutarlar geçerli sayı olmalıdır.")
             return
 
-        # Compute instalment amount
+        # Compute instalments
         remaining = total - down
         inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
 
@@ -171,15 +171,14 @@ class SaleFrame(ttk.Frame):
                     )
                 )
 
-        # Success: update global state & clear inputs
         messagebox.showinfo("Başarılı", "Satış ve taksitler kaydedildi.")
         app_state.last_customer_id = cust_id
-        self.load_customer(cust_id)
+        # After saving, reload the current customer (ID stays)
         self.clear_all()
-
+        self.load_customer()
 
     def clear_all(self) -> None:
-        """Reset only the sale-specific fields (keep customer loaded)."""
+        """Reset only the sale-specific fields (keeping customer loaded)."""
         self.var_date.set(dt.date.today().isoformat())
         self.var_total.set("")
         self.var_down.set("0")
