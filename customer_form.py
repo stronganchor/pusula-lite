@@ -1,4 +1,7 @@
 # customer_form.py
+# “Müşteri Tanıtım Bilgileri” tab, for both new and existing customers,
+# now switches to sale tab after saving.
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -45,7 +48,9 @@ class AddCustomerFrame(ttk.Frame):
         entry_id.bind("<FocusOut>", lambda e: self.load_customer())
 
         ttk.Label(self, text="Kayıt Tarihi:").grid(row=row, column=2, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_reg_date).grid(row=row, column=3, sticky="w", **pad)
+        ttk.Label(self, textvariable=self.var_reg_date).grid(
+            row=row, column=3, sticky="w", **pad
+        )
         row += 1
 
         # --- Adı Soyadı + Telefon ---
@@ -61,7 +66,7 @@ class AddCustomerFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Separator(self, orient="horizontal")\
+        ttk.Separator(self, orient="horizontal") \
             .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
         row += 1
 
@@ -84,7 +89,7 @@ class AddCustomerFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Separator(self, orient="horizontal")\
+        ttk.Separator(self, orient="horizontal") \
             .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
         row += 1
 
@@ -112,7 +117,7 @@ class AddCustomerFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Separator(self, orient="horizontal")\
+        ttk.Separator(self, orient="horizontal") \
             .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
         row += 1
 
@@ -152,9 +157,8 @@ class AddCustomerFrame(ttk.Frame):
         # Initialize as “new customer”
         self._new_customer_defaults()
 
-
     def _new_customer_defaults(self) -> None:
-        """Set up the next ID + today’s date as defaults (and remember them)."""
+        """Set the next free ID and today’s date as defaults."""
         with db.session() as s:
             last = s.query(func.max(db.Customer.id)).scalar() or 0
         self._default_id   = str(last + 1)
@@ -163,15 +167,13 @@ class AddCustomerFrame(ttk.Frame):
         self.var_id.set(self._default_id)
         self.var_reg_date.set(self._default_date)
 
-
     def load_customer(self) -> None:
         """Load an existing customer when you tab away from Müşteri No."""
         raw = self.var_id.get().strip()
 
-        # If ID is the untouched default and no name typed yet, skip lookup
+        # Skip lookup if still the untouched default and no edits
         if raw == getattr(self, "_default_id", None) and not self.var_name.get().strip():
             return
-
         if not raw.isdigit():
             return
 
@@ -190,7 +192,7 @@ class AddCustomerFrame(ttk.Frame):
             self.var_work_address.set(cust.work_address or "")
             self.var_notes.set(cust.notes or "")
 
-            # Load up to two contacts
+            # Load up to two existing contacts
             contacts = (
                 s.query(db.Contact)
                  .filter_by(customer_id=cid)
@@ -199,7 +201,6 @@ class AddCustomerFrame(ttk.Frame):
                  .all()
             )
 
-        # Fill Ek Kişi slots
         for slot, vars in enumerate([
             (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
             (self.c2_name, self.c2_phone, self.c2_home, self.c2_work),
@@ -217,9 +218,8 @@ class AddCustomerFrame(ttk.Frame):
                 home_v.set("")
                 work_v.set("")
 
-
     def save(self) -> None:
-        """Insert a new customer or update an existing one, plus two contacts."""
+        """Insert a new customer or update an existing one, then switch to sale tab."""
         name = self.var_name.get().strip()
         if not name:
             messagebox.showwarning("Eksik Bilgi", "Adı Soyadı zorunludur.")
@@ -229,7 +229,6 @@ class AddCustomerFrame(ttk.Frame):
         cid = int(raw) if raw.isdigit() else None
 
         with db.session() as s:
-            # Try to fetch existing
             cust = s.get(db.Customer, cid) if cid else None
 
             if cust:
@@ -240,7 +239,7 @@ class AddCustomerFrame(ttk.Frame):
                 cust.work_address   = self.var_work_address.get().strip()
                 cust.notes          = self.var_notes.get().strip()
             else:
-                # Create new
+                # Create new record
                 today = date.today()
                 cust = db.Customer(
                     id=cid,
@@ -274,11 +273,16 @@ class AddCustomerFrame(ttk.Frame):
                     ))
 
         messagebox.showinfo("Başarılı", "Müşteri kaydedildi.")
+
+        # ** New: after saving, switch to Satış Kaydet tab with this customer **
+        self.sale_frame.select_customer(cid)
+        self.master.select(self.sale_frame)
+
+        # Reset for next entry
         self.clear_all()
 
-
     def clear_all(self) -> None:
-        """Reset every field and restore the new-customer defaults."""
+        """Reset all fields and restore defaults for a new customer."""
         for var in [
             self.var_id, self.var_reg_date,
             self.var_name, self.var_phone,
