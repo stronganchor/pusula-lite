@@ -1,87 +1,47 @@
 # main.py
 # Pusula-Lite — single-store instalment-sales app
-# Windows UI version (Tkinter)
+# Windows UI version (Tkinter) — now single window with tabs
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import db  # local module that handles SQLite schema + migrations
+
+import db
+from customer_form import AddCustomerFrame
+from customer_search import CustomerSearchFrame
+from sale_form import SaleFrame
 
 
 class PusulaLiteApp(tk.Tk):
-    """Root window that wires the whole program together."""
+    """Root window with three tabs instead of pop-ups."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Pusula Lite  ▸  F1:Arama  F2:Ekle  F3:Satış  Esc:Çıkış")
+        self.title("Pusula Lite")
         self.geometry("800x600")
         self.minsize(640, 480)
-
-        # Fill the grid
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
 
         # Create / migrate database
         db.init_db()
 
-        # Home-screen instructions (Turkish)
-        info = (
-            "F1   Müşteri Arama\n"
-            "F2   Yeni Müşteri Ekle\n"
-            "F3   Satış Kaydet\n"
-            "Esc  Çıkış"
-        )
-        ttk.Label(
-            self,
-            text=info,
-            justify="center",
-            font=("Segoe UI", 16, "bold"),
-        ).grid(sticky="nsew")
+        # Notebook (tabs)
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
 
-        # Global key bindings
-        self.bind_all("<F1>", self.open_customer_search)
-        self.bind_all("<F2>", self.open_add_customer)
-        self.bind_all("<F3>", self.open_record_sale)
-        self.bind_all("<Escape>", lambda _: self.quit())
+        # Instantiate each form as a Frame
+        self.tab_search = CustomerSearchFrame(notebook)
+        self.tab_add    = AddCustomerFrame(notebook)
+        self.tab_sale   = SaleFrame(notebook)
 
-    # ------------------------------------------------------------------ #
-    #  Window launchers                                                   #
-    # ------------------------------------------------------------------ #
+        notebook.add(self.tab_search, text="Müşteri Arama (F1)")
+        notebook.add(self.tab_add,    text="Yeni Müşteri (F2)")
+        notebook.add(self.tab_sale,   text="Satış Kaydet (F3)")
 
-    def open_customer_search(self, _=None) -> None:
-        """Launch searchable customer list (F1)."""
-        try:
-            from customer_search import CustomerSearchWindow
-            CustomerSearchWindow(self)
-        except ImportError:
-            messagebox.showinfo(
-                "Eksik Modül",
-                "customer_search.py dosyası bulunamadı."
-            )
+        # Global key bindings to switch tabs
+        self.bind_all("<F1>", lambda e: notebook.select(self.tab_search))
+        self.bind_all("<F2>", lambda e: notebook.select(self.tab_add))
+        self.bind_all("<F3>", lambda e: notebook.select(self.tab_sale))
+        self.bind_all("<Escape>", lambda e: self.quit())
 
-    def open_add_customer(self, _=None) -> None:
-        """Launch 'add customer' dialog (F2)."""
-        try:
-            from customer_form import AddCustomerWindow
-            AddCustomerWindow(self)
-        except ImportError:
-            messagebox.showinfo(
-                "Eksik Modül",
-                "customer_form.py dosyası bulunamadı."
-            )
-
-    def open_record_sale(self, _=None) -> None:
-        """Launch sale-entry screen for a selected customer (F3)."""
-        try:
-            from sale_form import SaleWindow
-            SaleWindow(self)
-        except ImportError:
-            messagebox.showinfo(
-                "Eksik Modül",
-                "sale_form.py dosyası bulunamadı."
-            )
-
-
-# ---------------------------------------------------------------------- #
 
 if __name__ == "__main__":
     app = PusulaLiteApp()
