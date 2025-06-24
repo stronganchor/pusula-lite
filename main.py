@@ -47,10 +47,11 @@ class PusulaLiteApp(tk.Tk):
         self.notebook.add(self.tab_sale,   text="Satış Kaydet (F3)")
         self.notebook.add(self.tab_detail, text="Taksitli Satış Kayıt Bilgisi")
 
-        # Global key bindings for quick tab switching
-        self.bind_all("<F1>", lambda e: self.notebook.select(self.tab_search))
-        self.bind_all("<F2>", lambda e: self.notebook.select(self.tab_add))
-        self.bind_all("<F3>", lambda e: self.notebook.select(self.tab_sale))
+        # REMOVE: F1/F2/F3 shortcuts for now
+        # self.bind_all("<F1>", lambda e: self.notebook.select(self.tab_search))
+        # self.bind_all("<F2>", lambda e: self.notebook.select(self.tab_add))
+        # self.bind_all("<F3>", lambda e: self.notebook.select(self.tab_sale))
+        # Keep Escape to quit
         self.bind_all("<Escape>", lambda e: self.quit())
 
         # On startup, load detail for last‐selected or newest customer
