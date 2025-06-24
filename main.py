@@ -41,16 +41,12 @@ class PusulaLiteApp(tk.Tk):
         self.tab_search.detail_frame = self.tab_detail
         self.tab_add.sale_frame      = self.tab_sale
 
-        # Add tabs in order
-        self.notebook.add(self.tab_search, text="Müşteri Arama (F1)")
-        self.notebook.add(self.tab_add,    text="Müşteri Tanıtım Bilgileri (F2)")
-        self.notebook.add(self.tab_sale,   text="Satış Kaydet (F3)")
+        # Add tabs in order (removed F1/F2/F3 labels)
+        self.notebook.add(self.tab_search, text="Müşteri Arama")
+        self.notebook.add(self.tab_add,    text="Müşteri Tanıtım Bilgileri")
+        self.notebook.add(self.tab_sale,   text="Satış Kaydet")
         self.notebook.add(self.tab_detail, text="Taksitli Satış Kayıt Bilgisi")
 
-        # REMOVE: F1/F2/F3 shortcuts for now
-        # self.bind_all("<F1>", lambda e: self.notebook.select(self.tab_search))
-        # self.bind_all("<F2>", lambda e: self.notebook.select(self.tab_add))
-        # self.bind_all("<F3>", lambda e: self.notebook.select(self.tab_sale))
         # Keep Escape to quit
         self.bind_all("<Escape>", lambda e: self.quit())
 
