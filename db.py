@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     ForeignKey,
     Text,
+    text,  # for pragmatic migrations
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -42,7 +43,8 @@ class Customer(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False)
     phone = Column(String(30))
-    address = Column(String(255))
+    address = Column(String(255))            # Ev adresi
+    work_address = Column(String(255))       # İş adresi
     notes = Column(Text)
 
     contacts = relationship("Contact", back_populates="customer", cascade="all, delete")
@@ -50,7 +52,7 @@ class Customer(Base):
 
 
 class Contact(Base):
-    """Alternate / delivery contact for a customer (ad-soyad + telefon)."""
+    """Alternate / delivery contact for a customer."""
 
     __tablename__ = "contacts"
 
@@ -58,6 +60,8 @@ class Contact(Base):
     customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"))
     name = Column(String(120))
     phone = Column(String(30))
+    home_address = Column(String(255))       # Yeni
+    work_address = Column(String(255))       # Yeni
 
     customer = relationship("Customer", back_populates="contacts")
 
@@ -94,9 +98,23 @@ class Installment(Base):
 #  Helper functions                                                      #
 # ---------------------------------------------------------------------- #
 
+def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:
+    """Utility: add column if it is not yet in the table."""
+    existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+    if column not in existing:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def init_db() -> None:
-    """Create tables if they do not yet exist (idempotent)."""
+    """Create tables and apply lightweight migrations."""
     Base.metadata.create_all(engine)
+
+    with engine.begin() as conn:
+        # customers.work_address
+        _add_column_if_missing(conn, "customers", "work_address", "VARCHAR(255)")
+        # contacts.home_address + contacts.work_address
+        _add_column_if_missing(conn, "contacts", "home_address", "VARCHAR(255)")
+        _add_column_if_missing(conn, "contacts", "work_address", "VARCHAR(255)")
 
 
 @contextmanager
