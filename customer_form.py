@@ -1,5 +1,5 @@
 # customer_form.py
-# Dialog for adding (or later editing) a customer record.
+# Converted AddCustomerWindow → AddCustomerFrame
 
 from __future__ import annotations
 
@@ -9,34 +9,30 @@ from tkinter import ttk, messagebox
 import db
 
 
-class AddCustomerWindow(tk.Toplevel):
+class AddCustomerFrame(ttk.Frame):
     """Form to create a new customer with optional alternate contacts."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
-        super().__init__(master)
-        self.title("Yeni Müşteri")
-        self.grab_set()
-        self.resizable(False, False)
-
+        super().__init__(master, padding=8)
         # ---------------------------------------------------------------- #
-        #  Variables                                                       #
+        #  Variables                                                      #
         # ---------------------------------------------------------------- #
-        self.var_name = tk.StringVar()
-        self.var_phone = tk.StringVar()
-        self.var_address = tk.StringVar()       # Ev adresi
-        self.var_work_address = tk.StringVar()  # İş adresi
-        self.var_notes = tk.StringVar()
+        self.var_name         = tk.StringVar()
+        self.var_phone        = tk.StringVar()
+        self.var_address      = tk.StringVar()       # Ev adresi
+        self.var_work_address = tk.StringVar()       # İş adresi
+        self.var_notes        = tk.StringVar()
 
         # Each contact: (name, phone, home_address, work_address)
         self.contacts: list[tuple[str, str, str, str]] = []
 
         # ---------------------------------------------------------------- #
-        #  Layout – mirrors legacy form                                    #
+        #  Layout                                                          #
         # ---------------------------------------------------------------- #
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        # --- Main customer fields --------------------------------------- #
+        # — Main customer fields —
         ttk.Label(self, text="Adı Soyadı *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_name, width=40).grid(
             row=row, column=1, columnspan=3, sticky="w", **pad
@@ -72,7 +68,7 @@ class AddCustomerWindow(tk.Toplevel):
         )
         row += 1
 
-        # --- Alternate contacts ------------------------------------------ #
+        # — Alternate contacts —
         ttk.Separator(self, orient="horizontal").grid(
             row=row, column=0, columnspan=4, sticky="ew", **pad
         )
@@ -84,11 +80,11 @@ class AddCustomerWindow(tk.Toplevel):
         frm = ttk.Frame(self)
         frm.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
 
-        # Contact fields
-        self.contact_name = tk.StringVar()
+        # Contact entry vars
+        self.contact_name  = tk.StringVar()
         self.contact_phone = tk.StringVar()
-        self.contact_home = tk.StringVar()
-        self.contact_work = tk.StringVar()
+        self.contact_home  = tk.StringVar()
+        self.contact_work  = tk.StringVar()
 
         # Row 0: Name
         ttk.Label(frm, text="Adı Soyadı").grid(row=0, column=0, sticky="e", **pad)
@@ -113,71 +109,67 @@ class AddCustomerWindow(tk.Toplevel):
         ttk.Button(frm, text="Kişi Ekle", command=self.add_contact).grid(
             row=3, column=3, sticky="w", **pad
         )
-
-        # Row 4: List of added contacts
+        # Row 4: Listbox
         self.list_contacts = tk.Listbox(frm, height=4, width=70)
         self.list_contacts.grid(row=4, column=0, columnspan=4, sticky="w", **pad)
 
         row += 1
 
-        # --- Action buttons ---------------------------------------------- #
+        # — Action buttons —
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=2, sticky="e", **pad
         )
-        ttk.Button(self, text="Vazgeç", command=self.destroy).grid(
+        ttk.Button(self, text="Vazgeç",       command=self.clear_all).grid(
             row=row, column=3, sticky="w", **pad
         )
 
-        self.bind("<F10>", lambda *_: self.save())
+        # F10 to trigger save
+        self.bind_all("<F10>", lambda e: self.save())
 
-    # ------------------------------------------------------------------ #
     def add_contact(self) -> None:
-        """Add current contact fields to list + memory."""
         name = self.contact_name.get().strip()
         if not name:
             return
         phone = self.contact_phone.get().strip()
-        home = self.contact_home.get().strip()
-        work = self.contact_work.get().strip()
+        home  = self.contact_home.get().strip()
+        work  = self.contact_work.get().strip()
 
         self.contacts.append((name, phone, home, work))
-        preview = f"{name} — {phone}"
-        self.list_contacts.insert(tk.END, preview)
+        self.list_contacts.insert(tk.END, f"{name} — {phone}")
 
-        # Clear
-        self.contact_name.set("")
-        self.contact_phone.set("")
-        self.contact_home.set("")
-        self.contact_work.set("")
+        # clear
+        for var in (self.contact_name, self.contact_phone, self.contact_home, self.contact_work):
+            var.set("")
 
-    # ------------------------------------------------------------------ #
     def save(self) -> None:
-        """Persist customer + contacts."""
         name = self.var_name.get().strip()
         if not name:
             messagebox.showwarning("Eksik Bilgi", "Adı Soyadı zorunludur.")
             return
 
         with db.session() as s:
-            customer = db.Customer(
+            cust = db.Customer(
                 name=name,
                 phone=self.var_phone.get().strip(),
                 address=self.var_address.get().strip(),
                 work_address=self.var_work_address.get().strip(),
                 notes=self.var_notes.get().strip(),
             )
-            s.add(customer)
-            s.flush()
-
+            s.add(cust); s.flush()
             for cname, cphone, chome, cwork in self.contacts:
-                contact = db.Contact(
-                    customer_id=customer.id,
-                    name=cname,
-                    phone=cphone,
-                    home_address=chome,
-                    work_address=cwork,
-                )
-                s.add(contact)
+                s.add(db.Contact(
+                    customer_id=cust.id,
+                    name=cname, phone=cphone,
+                    home_address=chome, work_address=cwork,
+                ))
 
         messagebox.showinfo("Başarılı", "Müşteri kaydedildi.")
-        self.destroy()
+        self.clear_all()
+
+    def clear_all(self) -> None:
+        for var in (self.var_name, self.var_phone,
+                    self.var_address, self.var_work_address,
+                    self.var_notes):
+            var.set("")
+        self.contacts.clear()
+        self.list_contacts.delete(0, tk.END)
