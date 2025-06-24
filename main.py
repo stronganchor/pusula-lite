@@ -1,4 +1,6 @@
 # main.py
+# Pusula-Lite — single-window, tabbed UI with search, add, sale, and detail
+
 import tkinter as tk
 from tkinter import ttk
 
@@ -18,39 +20,40 @@ class PusulaLiteApp(tk.Tk):
         self.geometry("800x600")
         self.minsize(640, 480)
 
-        # Ensure DB exists
+        # Ensure database and tables exist
         db.init_db()
 
-        # Notebook
+        # Notebook container
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True)
 
-        # Instantiate each tab
+        # Instantiate each tab frame
         self.tab_search = CustomerSearchFrame(
             self.notebook,
             notebook=self.notebook,
-            detail_frame=None  # placeholder, will set after detail instantiation
+            detail_frame=None  # will be wired below
         )
         self.tab_add    = AddCustomerFrame(self.notebook)
         self.tab_sale   = SaleFrame(self.notebook)
         self.tab_detail = CustomerDetailFrame(self.notebook)
 
-        # Now wire the search tab to the detail tab
+        # Wire cross-tab references
         self.tab_search.detail_frame = self.tab_detail
+        self.tab_add.sale_frame      = self.tab_sale
 
-        # Add them in order
+        # Add tabs in order
         self.notebook.add(self.tab_search, text="Müşteri Arama (F1)")
         self.notebook.add(self.tab_add,    text="Müşteri Tanıtım Bilgileri (F2)")
         self.notebook.add(self.tab_sale,   text="Satış Kaydet (F3)")
         self.notebook.add(self.tab_detail, text="Taksitli Satış Kayıt Bilgisi")
 
-        # Key bindings
+        # Global key bindings for quick tab switching
         self.bind_all("<F1>", lambda e: self.notebook.select(self.tab_search))
         self.bind_all("<F2>", lambda e: self.notebook.select(self.tab_add))
         self.bind_all("<F3>", lambda e: self.notebook.select(self.tab_sale))
         self.bind_all("<Escape>", lambda e: self.quit())
 
-        # Load the detail tab on the last or most recent customer
+        # On startup, load detail for last‐selected or newest customer
         self.tab_detail.load_customer()
 
 
