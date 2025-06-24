@@ -1,6 +1,7 @@
 # sale_form.py
 # Record a sale and automatically create an instalment plan,
-# now with editable Müşteri No and non-editable name label.
+# now with editable Müşteri No and non-editable name label,
+# and a fixed load_customer that honors manually entered IDs.
 
 from __future__ import annotations
 import datetime as dt
@@ -21,11 +22,11 @@ class SaleFrame(ttk.Frame):
 
         # State variables
         self.var_customer_id   = tk.StringVar()
-        self.var_customer_name = tk.StringVar(value="(seçilmedi)")
-        self.var_date          = tk.StringVar(value=dt.date.today().isoformat())
+        self.var_customer_name = tk.StringVar("(seçilmedi)")
+        self.var_date          = tk.StringVar(dt.date.today().isoformat())
         self.var_total         = tk.StringVar()
-        self.var_down          = tk.StringVar(value="0")
-        self.var_n_inst        = tk.StringVar(value="1")
+        self.var_down          = tk.StringVar("0")
+        self.var_n_inst        = tk.StringVar("1")
 
         pad = {"padx": 8, "pady": 4}
         row = 0
@@ -43,18 +44,14 @@ class SaleFrame(ttk.Frame):
         row += 1
 
         # --- Date ---
-        ttk.Label(self, text="Tarih (YYYY-MM-DD)").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Tarih (YYYY-MM-DD)").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_date, width=15).grid(
             row=row, column=1, sticky="w", **pad
         )
         row += 1
 
         # --- Amounts ---
-        ttk.Label(self, text="Toplam Tutar *").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Toplam Tutar *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_total, width=15).grid(
             row=row, column=1, sticky="w", **pad
         )
@@ -66,9 +63,7 @@ class SaleFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Label(self, text="Taksit Sayısı *").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Taksit Sayısı *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_n_inst, width=5).grid(
             row=row, column=1, sticky="w", **pad
         )
@@ -87,44 +82,44 @@ class SaleFrame(ttk.Frame):
         self.load_customer()
 
     def load_customer(self, event=None) -> None:
-        """Load customer based on entry, or fallback to last/newest."""
+        """Load customer by entered ID or fallback to last/newest."""
+
         raw = self.var_customer_id.get().strip()
-        # If the user typed a number, use it:
         if raw.isdigit():
             cid = int(raw)
         else:
-            # Otherwise fallback to last-selected
             cid = app_state.last_customer_id
-            # If still None, use the newest in DB
             if cid is None:
                 with db.session() as s:
                     rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
                     cid = rec[0] if rec else None
+
         if cid is None:
             self.var_customer_name.set("(seçilmedi)")
             return
 
-        # Fetch from DB
+        # Fetch inside session, copy name before closing
         with db.session() as s:
             cust = s.get(db.Customer, cid)
-        if not cust:
-            messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
-            self.var_customer_name.set("(seçilmedi)")
-            return
+            if not cust:
+                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
+                name = "(seçilmedi)"
+            else:
+                name = cust.name
+                app_state.last_customer_id = cid
 
-        # Update display + global state
-        self.var_customer_id.set(str(cust.id))
-        self.var_customer_name.set(cust.name)
-        app_state.last_customer_id = cust.id
+        # Update display
+        self.var_customer_id.set(str(cid))
+        self.var_customer_name.set(name)
 
     def save(self) -> None:
-        """Validate fields, write sale + instalments, update last-customer."""
-        # Validate customer ID
+        """Validate fields, persist sale + instalments, update last-customer."""
         raw = self.var_customer_id.get().strip()
         if not raw.isdigit():
             messagebox.showwarning("Eksik Bilgi", "Geçerli müşteri numarası giriniz.")
             return
         cust_id = int(raw)
+
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
         if not cust:
@@ -135,9 +130,7 @@ class SaleFrame(ttk.Frame):
         try:
             sale_date = dt.date.fromisoformat(self.var_date.get())
         except ValueError:
-            messagebox.showwarning(
-                "Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır."
-            )
+            messagebox.showwarning("Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır.")
             return
 
         # Validate amounts
@@ -151,11 +144,9 @@ class SaleFrame(ttk.Frame):
             messagebox.showwarning("Hatalı Giriş", "Tutarlar geçerli sayı olmalıdır.")
             return
 
-        # Compute instalments
         remaining = total - down
         inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
 
-        # Persist sale + installments
         with db.session() as s:
             sale = db.Sale(date=sale_date, customer_id=cust_id, total=total)
             s.add(sale)
@@ -164,16 +155,12 @@ class SaleFrame(ttk.Frame):
                 due = sale_date + dt.timedelta(days=30 * i)
                 s.add(
                     db.Installment(
-                        sale_id=sale.id,
-                        due_date=due,
-                        amount=inst_amount,
-                        paid=0,
+                        sale_id=sale.id, due_date=due, amount=inst_amount, paid=0
                     )
                 )
 
         messagebox.showinfo("Başarılı", "Satış ve taksitler kaydedildi.")
         app_state.last_customer_id = cust_id
-        # After saving, reload the current customer (ID stays)
         self.clear_all()
         self.load_customer()
 
