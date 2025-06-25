@@ -21,26 +21,33 @@ TURKISH_MONTHS = [
     "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
 ]
 
+def format_currency(amount: decimal.Decimal) -> str:
+    """Format a Decimal into Turkish currency, e.g. 1.000.000,00₺."""
+    s = f"{amount:,.2f}"               # "1,000,000.00"
+    integer, dec = s.split(".")        # ["1,000,000","00"]
+    integer = integer.replace(",", ".")
+    return f"{integer},{dec}₺"
+
 class CustomerDetailFrame(ttk.Frame):
     """Shows header info + sales list for a customer.
     Upper half: list of sales.
-    Lower half: installment report by year/month, plus Ödeme section."""
+    Lower half: installment report by year/month, plus Ödeme on a single line."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
 
-        # Header variables
-        self.var_id        = tk.StringVar()
-        self.var_name      = tk.StringVar()
-        self.var_phone     = tk.StringVar()
-        self.var_address   = tk.StringVar()
+        # Header
+        self.var_id      = tk.StringVar()
+        self.var_name    = tk.StringVar()
+        self.var_phone   = tk.StringVar()
+        self.var_address = tk.StringVar()
 
-        # Report variables
-        self.report_year_var   = tk.StringVar()
-        self.var_total_debt    = tk.StringVar()
+        # Report
+        self.report_year_var = tk.StringVar()
+        self.var_total_debt  = tk.StringVar()
 
-        # Ödeme variables
-        self.payment_month_var  = tk.StringVar(value=TURKISH_MONTHS[date.today().month])
+        # Ödeme
+        self.payment_month_var  = tk.StringVar()
         self.payment_amount_var = tk.StringVar()
 
         pad = {"padx": 8, "pady": 4}
@@ -66,7 +73,7 @@ class CustomerDetailFrame(ttk.Frame):
         lbl_addr = ttk.Label(
             self, textvariable=self.var_address, wraplength=400, justify="left"
         )
-        lbl_addr.grid(row=row, column=1, columnspan=2, sticky="w", **pad)
+        lbl_addr.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
         row += 1
 
         ttk.Separator(self, orient="horizontal").grid(
@@ -78,7 +85,7 @@ class CustomerDetailFrame(ttk.Frame):
         cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
         headings = ("No", "Tarih", "Toplam Tutar", "Açıklama")
-        widths   = (60,     100,        120,            300)
+        widths   = (60,   100,           120,           300)
         for col, txt, w in zip(cols, headings, widths):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor="center")
@@ -126,11 +133,12 @@ class CustomerDetailFrame(ttk.Frame):
 
         # — Separator to Ödeme section —
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=4, sticky="ew", **pad
+            row=row, column=0, columnspan=5, sticky="ew", **pad
         )
         row += 1
 
-        # — Ödeme section —
+        # — Ödeme section (one line) —
+        self.columnconfigure(4, weight=1)
         ttk.Label(self, text="Ödeme Ayı:").grid(row=row, column=0, sticky="e", **pad)
         self.cmb_pay_month = ttk.Combobox(
             self,
@@ -141,24 +149,24 @@ class CustomerDetailFrame(ttk.Frame):
         )
         self.cmb_pay_month.grid(row=row, column=1, sticky="w", **pad)
         self.cmb_pay_month.bind("<<ComboboxSelected>>", lambda e: self.update_payment_amount())
-        row += 1
 
-        ttk.Label(self, text="Tutar:").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.payment_amount_var, width=12).grid(
-            row=row, column=1, sticky="w", **pad
+        ttk.Label(self, text="Tutar:").grid(row=row, column=2, sticky="e", **pad)
+        self.entry_pay_amount = ttk.Entry(
+            self, textvariable=self.payment_amount_var, width=15
         )
-        row += 1
+        self.entry_pay_amount.grid(row=row, column=3, sticky="w", **pad)
 
-        ttk.Button(self, text="Kaydet Ödeme", command=self.save_payment).grid(
-            row=row, column=1, sticky="w", **pad
+        self.btn_save_payment = ttk.Button(
+            self, text="Kaydet Ödeme", command=self.save_payment
         )
+        self.btn_save_payment.grid(row=row, column=4, sticky="w", **pad)
 
         # Initial load
         self.load_customer()
 
 
     def load_customer(self, event=None) -> None:
-        """Load header + sales and then populate report and ödeme defaults."""
+        """Load header + sales, then populate report and ödeme defaults."""
         raw = self.var_id.get().strip()
         if raw.isdigit():
             cust_id = int(raw)
@@ -171,7 +179,7 @@ class CustomerDetailFrame(ttk.Frame):
         if cust_id is None:
             return
 
-        # Load header + sales
+        # Header + sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
@@ -191,15 +199,20 @@ class CustomerDetailFrame(ttk.Frame):
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
-        # Populate sales table
+        # Populate sales
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
                 "", "end",
-                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
+                values=(
+                    sid,
+                    dt_.strftime("%Y-%m-%d"),
+                    format_currency(tot),
+                    desc or ""
+                )
             )
 
-        # Populate year combobox & report
+        # Populate year & report
         self.populate_years(cust_id)
         self.load_report()
 
@@ -222,7 +235,7 @@ class CustomerDetailFrame(ttk.Frame):
 
 
     def load_report(self) -> None:
-        """Load combined monthly report and update toplam borç & payment defaults."""
+        """Load combined monthly report, update toplam borç, and set ödeme defaults."""
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
 
@@ -248,9 +261,9 @@ class CustomerDetailFrame(ttk.Frame):
             if not paid:
                 grouped[m]["all_paid"] = False
 
-        # Update toplam borç (sum of unpaid for year)
+        # Update toplam borç: sum of unpaid months
         total_debt = sum(v["total"] for v in grouped.values() if not v["all_paid"])
-        self.var_total_debt.set(f"{total_debt:.2f}")
+        self.var_total_debt.set(format_currency(total_debt))
 
         # Populate report tree
         self.report_tree.delete(*self.report_tree.get_children())
@@ -259,22 +272,38 @@ class CustomerDetailFrame(ttk.Frame):
             paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
             self.report_tree.insert(
                 "", "end",
-                values=(TURKISH_MONTHS[m], f"{total:.2f}", paid_str)
+                values=(TURKISH_MONTHS[m], format_currency(total), paid_str)
             )
 
-        # Set default payment amount for selected month
+        # Determine earliest unpaid month (if any)
+        unpaid = [m for m, v in grouped.items() if not v["all_paid"]]
+        if unpaid:
+            m0 = min(unpaid)
+            self.payment_month_var.set(TURKISH_MONTHS[m0])
+            self.cmb_pay_month.config(state="readonly")
+            self.entry_pay_amount.config(state="normal")
+            self.payment_amount_var.set(format_currency(grouped[m0]["total"]))
+            self.btn_save_payment.config(state="normal")
+        else:
+            # disable Ödeme section
+            self.payment_month_var.set("")
+            self.payment_amount_var.set("")
+            self.cmb_pay_month.config(state="disabled")
+            self.entry_pay_amount.config(state="disabled")
+            self.btn_save_payment.config(state="disabled")
+
+        # keep grouped for update_payment_amount
         self.current_grouped = grouped
-        self.update_payment_amount()
 
 
     def update_payment_amount(self) -> None:
-        """Set payment_amount_var to the grouped total for the chosen month."""
+        """Update the Tutar field when the Ödeme Ayı changes."""
         month_name = self.payment_month_var.get()
-        if not month_name:
+        if not month_name or month_name not in TURKISH_MONTHS:
             return
         m = TURKISH_MONTHS.index(month_name)
         amt = self.current_grouped.get(m, {}).get("total", decimal.Decimal("0.00"))
-        self.payment_amount_var.set(f"{amt:.2f}")
+        self.payment_amount_var.set(format_currency(amt))
 
 
     def save_payment(self) -> None:
