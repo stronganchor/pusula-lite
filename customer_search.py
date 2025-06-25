@@ -179,8 +179,9 @@ class CustomerSearchFrame(ttk.Frame):
         cid = self._get_selected_cid()
         if cid is None:
             return
-        app_state.last_customer_id = cid
-        self.detail_frame.load_customer(cid)
+        # set the ID in the detail frame, then reload
+        self.detail_frame.var_id.set(str(cid))
+        self.detail_frame.load_customer()
         self.notebook.select(self.detail_frame)
 
     def go_to_edit(self) -> None:
@@ -205,5 +206,7 @@ class CustomerSearchFrame(ttk.Frame):
         cid = self._get_selected_cid()
         if cid is None:
             return
-        self.detail_frame.load_customer(cid)
+        # same approach as above
+        self.detail_frame.var_id.set(str(cid))
+        self.detail_frame.load_customer()
         self.notebook.select(self.detail_frame)
