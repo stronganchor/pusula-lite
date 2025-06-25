@@ -14,6 +14,15 @@ from sqlalchemy import func
 import db
 import app_state
 
+import decimal
+
+# Turkish month names, index 1–12
+TURKISH_MONTHS = [
+    "", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
+]
+
+
 class CustomerDetailFrame(ttk.Frame):
     """Shows header info + sales list for a customer.
     Upper half: list of sales. Lower half: installment report by year/month."""
@@ -183,11 +192,11 @@ class CustomerDetailFrame(ttk.Frame):
         self.report_year_var.set(str(default))
 
     def load_report(self) -> None:
-        """Load installment report for the selected customer and year."""
+        """Load a combined monthly installment report for the selected customer and year."""
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
 
-        # Query columns to keep instances attached
+        # fetch raw due_date, amount, paid for every installment in that year
         with db.session() as s:
             rows = (
                 s.query(
@@ -204,12 +213,27 @@ class CustomerDetailFrame(ttk.Frame):
                 .all()
             )
 
-        self.report_tree.delete(*self.report_tree.get_children())
+        # group by month
+        grouped: dict[int, dict[str, decimal.Decimal | bool]] = {}
         for due_date, amount, paid in rows:
-            month_name = calendar.month_name[due_date.month]
-            paid_str = "Evet" if paid else "Hayır"
+            m = due_date.month
+            if m not in grouped:
+                grouped[m] = {"total": decimal.Decimal("0.00"), "all_paid": True}
+            grouped[m]["total"] += amount
+            if not paid:
+                grouped[m]["all_paid"] = False
+
+        # repopulate the tree
+        self.report_tree.delete(*self.report_tree.get_children())
+        for m in sorted(grouped):
+            total = grouped[m]["total"]
+            paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
             self.report_tree.insert(
                 "",
                 "end",
-                values=(month_name, f"{amount:.2f}", paid_str)
+                values=(
+                    TURKISH_MONTHS[m],
+                    f"{total:.2f}",
+                    paid_str
+                )
             )
