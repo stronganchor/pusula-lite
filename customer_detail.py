@@ -163,26 +163,40 @@ class CustomerDetailFrame(ttk.Frame):
 
 
     def load_customer(self, event=None) -> None:
-        """Load header + sales, then populate report and ödeme defaults."""
-        raw = self.var_id.get().strip()
-        if raw.isdigit():
-            cust_id = int(raw)
+        """
+        Load header + sales for a given customer.
+        If called with an integer 'event', use that as the ID.
+        Otherwise, read from the entry or fall back to last-selected.
+        """
+        # Determine customer ID
+        if isinstance(event, int):
+            cust_id = event
         else:
-            cust_id = app_state.last_customer_id
-            if cust_id is None:
-                with db.session() as s:
-                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                    cust_id = rec[0] if rec else None
+            raw = self.var_id.get().strip()
+            if raw.isdigit():
+                cust_id = int(raw)
+            else:
+                cust_id = app_state.last_customer_id
+                if cust_id is None:
+                    with db.session() as s:
+                        rec = s.query(db.Customer.id) \
+                               .order_by(db.Customer.id.desc()) \
+                               .first()
+                        cust_id = rec[0] if rec else None
+
         if cust_id is None:
             return
 
-        # Header + sales
+        # Fetch customer + sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
                 messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
                 return
-            name, phone, addr = cust.name or "", cust.phone or "", cust.address or ""
+
+            name  = cust.name or ""
+            phone = cust.phone or ""
+            addr  = cust.address or ""
             sales = (
                 s.query(db.Sale.id, db.Sale.date, db.Sale.total, db.Sale.description)
                  .filter_by(customer_id=cust_id)
@@ -190,29 +204,30 @@ class CustomerDetailFrame(ttk.Frame):
                  .all()
             )
 
+        # Update header + state
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
-        # Populate sales
+        # Populate sales table
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
-                "", "end",
+                "",
+                "end",
                 values=(
                     sid,
                     dt_.strftime("%Y-%m-%d"),
                     format_currency(tot),
                     desc or ""
-                )
+                ),
             )
 
-        # Populate year & report
+        # Refresh report & payment section
         self.populate_years(cust_id)
         self.load_report()
-
 
     def populate_years(self, cust_id: int) -> None:
         """Fill year list based on installments, default to current year."""
