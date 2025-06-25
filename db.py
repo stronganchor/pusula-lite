@@ -73,6 +73,7 @@ class Sale(Base):
     date        = Column(Date, nullable=False)
     customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"))
     total       = Column(Numeric(10, 2), nullable=False)
+    description = Column(Text)  # ← new
 
     customer     = relationship("Customer", back_populates="sales")
     installments = relationship("Installment", back_populates="sale", cascade="all, delete")
