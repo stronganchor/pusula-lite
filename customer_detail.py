@@ -10,7 +10,8 @@ import db
 import app_state
 
 class CustomerDetailFrame(ttk.Frame):
-    """Shows header info + sales list for a customer."""
+    """Shows header info + sales list for a customer.
+    Change the Müşteri No at the top to switch records in-place."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
@@ -23,14 +24,14 @@ class CustomerDetailFrame(ttk.Frame):
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        # Müşteri No
+        # — Müşteri No entry —
         ttk.Label(self, text="Müşteri No:").grid(row=row, column=0, sticky="e", **pad)
         ent_id = ttk.Entry(self, textvariable=self.var_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
         ent_id.bind("<FocusOut>", self.load_customer)
         row += 1
 
-        # Header
+        # — Header info —
         ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=0, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_name).grid(row=row, column=1, sticky="w", **pad)
         row += 1
@@ -40,7 +41,9 @@ class CustomerDetailFrame(ttk.Frame):
         row += 1
 
         ttk.Label(self, text="Adres:").grid(row=row, column=0, sticky="ne", **pad)
-        lbl_addr = ttk.Label(self, textvariable=self.var_address, wraplength=400, justify="left")
+        lbl_addr = ttk.Label(
+            self, textvariable=self.var_address, wraplength=400, justify="left"
+        )
         lbl_addr.grid(row=row, column=1, columnspan=2, sticky="w", **pad)
         row += 1
 
@@ -49,7 +52,7 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # Sales table (with Açıklama)
+        # — Sales table (with Açıklama) —
         cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
         for col, txt, w in zip(
@@ -68,20 +71,29 @@ class CustomerDetailFrame(ttk.Frame):
         self.load_customer()
 
     def load_customer(self, event=None) -> None:
-        """Load customer header + sales (including açıklama)."""
-        raw = self.var_id.get().strip()
-        if raw.isdigit():
-            cust_id = int(raw)
+        """Load header + sales for a given customer.
+
+        If called with an integer (cid), use that.
+        Otherwise, read from the entry or fall back to last-selected.
+        """
+        # Determine customer ID
+        if isinstance(event, int):
+            cust_id = event
         else:
-            cust_id = app_state.last_customer_id
-            if cust_id is None:
-                with db.session() as s:
-                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                    cust_id = rec[0] if rec else None
+            raw = self.var_id.get().strip()
+            if raw.isdigit():
+                cust_id = int(raw)
+            else:
+                cust_id = app_state.last_customer_id
+                if cust_id is None:
+                    with db.session() as s:
+                        rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
+                        cust_id = rec[0] if rec else None
 
         if cust_id is None:
             return
 
+        # Fetch customer + sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
@@ -93,20 +105,28 @@ class CustomerDetailFrame(ttk.Frame):
             addr  = cust.address or ""
             sales = (
                 s.query(db.Sale.id, db.Sale.date, db.Sale.total, db.Sale.description)
-                 .filter_by(customer_id=cust.id)
+                 .filter_by(customer_id=cust_id)
                  .order_by(db.Sale.date)
                  .all()
             )
 
+        # Update state + entry fields
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
+        # Populate the Treeview
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
-                "", "end",
-                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
+                "",
+                "end",
+                values=(
+                    sid,
+                    dt_.strftime("%Y-%m-%d"),
+                    f"{tot:.2f}",
+                    desc or "",
+                ),
             )
