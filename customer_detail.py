@@ -9,7 +9,6 @@ from tkinter import ttk, messagebox
 import db
 import app_state
 
-
 class CustomerDetailFrame(ttk.Frame):
     """Shows header info + sales list for a customer.
     Change the Müşteri No at the top to switch records in-place."""
@@ -53,10 +52,14 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Sales table —
-        cols = ("sale_id", "tarih", "tutar")
+        # — Sales table (with Açıklama) —
+        cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
-        for col, txt, w in zip(cols, ("ID", "Tarih", "Toplam Tutar"), (60, 100, 120)):
+        for col, txt, w in zip(
+            cols,
+            ("ID", "Tarih", "Toplam Tutar", "Açıklama"),
+            (60, 100, 120, 300),
+        ):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor="center")
 
@@ -82,21 +85,25 @@ class CustomerDetailFrame(ttk.Frame):
         if cust_id is None:
             return
 
-        # Fetch inside session, copy before commit
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
                 messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
                 return
-            name = cust.name or ""
+
+            name  = cust.name or ""
             phone = cust.phone or ""
-            addr = cust.address or ""
-            # Query sales
+            addr  = cust.address or ""
             sales = (
-                s.query(db.Sale.id, db.Sale.date, db.Sale.total)
-                 .filter_by(customer_id=cust.id)
-                 .order_by(db.Sale.date)
-                 .all()
+                s.query(
+                    db.Sale.id,
+                    db.Sale.date,
+                    db.Sale.total,
+                    db.Sale.description,
+                )
+                .filter_by(customer_id=cust.id)
+                .order_by(db.Sale.date)
+                .all()
             )
 
         # Update header + global state
@@ -108,7 +115,14 @@ class CustomerDetailFrame(ttk.Frame):
 
         # Populate sales table
         self.tree.delete(*self.tree.get_children())
-        for sid, dt_, tot in sales:
+        for sid, dt_, tot, desc in sales:
             self.tree.insert(
-                "", "end", values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}")
+                "",
+                "end",
+                values=(
+                    sid,
+                    dt_.strftime("%Y-%m-%d"),
+                    f"{tot:.2f}",
+                    desc or "",
+                ),
             )
