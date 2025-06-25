@@ -272,8 +272,6 @@ class AddCustomerFrame(ttk.Frame):
                         work_address=wk,
                     ))
 
-        messagebox.showinfo("Başarılı", "Müşteri kaydedildi.")
-
         # ** New: after saving, switch to Satış Kaydet tab with this customer **
         self.sale_frame.select_customer(cid)
         self.master.select(self.sale_frame)
