@@ -1,6 +1,6 @@
 # customer_detail.py
-# Static “Taksitli Satış Kayıt Bilgisi” tab — load/edit by customer number,
-# now with a lower-half report of installments by month/year.
+# Static "Taksitli Satış Kayıt Bilgisi" tab — load/edit by customer number,
+# with lower-half report of installments by month/year.
 
 from __future__ import annotations
 
@@ -115,7 +115,6 @@ class CustomerDetailFrame(ttk.Frame):
     def load_customer(self, event=None) -> None:
         """Load header + sales for a given customer,
         then populate year list and report."""
-        # Determine customer ID
         raw = self.var_id.get().strip()
         if raw.isdigit():
             cust_id = int(raw)
@@ -129,14 +128,12 @@ class CustomerDetailFrame(ttk.Frame):
         if cust_id is None:
             return
 
-        # Fetch customer + sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
                 messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
                 return
 
-            # Header
             name  = cust.name or ""
             phone = cust.phone or ""
             addr  = cust.address or ""
@@ -152,14 +149,12 @@ class CustomerDetailFrame(ttk.Frame):
                 .all()
             )
 
-        # Update header + global state
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
-        # Populate sales table
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
@@ -168,7 +163,6 @@ class CustomerDetailFrame(ttk.Frame):
                 values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
             )
 
-        # Populate year selector & report
         self.populate_years(cust_id)
         self.load_report()
 
@@ -193,25 +187,29 @@ class CustomerDetailFrame(ttk.Frame):
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
 
+        # Query columns to keep instances attached
         with db.session() as s:
-            insts = (
-                s.query(db.Installment)
-                 .join(db.Sale)
-                 .filter(
-                     db.Sale.customer_id == cust_id,
-                     func.strftime("%Y", db.Installment.due_date) == str(year)
-                 )
-                 .order_by(db.Installment.due_date)
-                 .all()
+            rows = (
+                s.query(
+                    db.Installment.due_date,
+                    db.Installment.amount,
+                    db.Installment.paid,
+                )
+                .join(db.Sale)
+                .filter(
+                    db.Sale.customer_id == cust_id,
+                    func.strftime("%Y", db.Installment.due_date) == str(year)
+                )
+                .order_by(db.Installment.due_date)
+                .all()
             )
 
-        # Populate report tree
         self.report_tree.delete(*self.report_tree.get_children())
-        for inst in insts:
-            month_name = calendar.month_name[inst.due_date.month]
-            paid_str = "Evet" if inst.paid else "Hayır"
+        for due_date, amount, paid in rows:
+            month_name = calendar.month_name[due_date.month]
+            paid_str = "Evet" if paid else "Hayır"
             self.report_tree.insert(
                 "",
                 "end",
-                values=(month_name, f"{inst.amount:.2f}", paid_str)
+                values=(month_name, f"{amount:.2f}", paid_str)
             )
