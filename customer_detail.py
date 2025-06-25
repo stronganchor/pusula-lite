@@ -10,8 +10,7 @@ import db
 import app_state
 
 class CustomerDetailFrame(ttk.Frame):
-    """Shows header info + sales list for a customer.
-    Change the Müşteri No at the top to switch records in-place."""
+    """Shows header info + sales list for a customer."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
@@ -24,14 +23,14 @@ class CustomerDetailFrame(ttk.Frame):
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        # — Müşteri No entry —
+        # Müşteri No
         ttk.Label(self, text="Müşteri No:").grid(row=row, column=0, sticky="e", **pad)
         ent_id = ttk.Entry(self, textvariable=self.var_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
         ent_id.bind("<FocusOut>", self.load_customer)
         row += 1
 
-        # — Header info —
+        # Header
         ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=0, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_name).grid(row=row, column=1, sticky="w", **pad)
         row += 1
@@ -41,9 +40,7 @@ class CustomerDetailFrame(ttk.Frame):
         row += 1
 
         ttk.Label(self, text="Adres:").grid(row=row, column=0, sticky="ne", **pad)
-        lbl_addr = ttk.Label(
-            self, textvariable=self.var_address, wraplength=400, justify="left"
-        )
+        lbl_addr = ttk.Label(self, textvariable=self.var_address, wraplength=400, justify="left")
         lbl_addr.grid(row=row, column=1, columnspan=2, sticky="w", **pad)
         row += 1
 
@@ -52,7 +49,7 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Sales table (with Açıklama) —
+        # Sales table (with Açıklama)
         cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
         for col, txt, w in zip(
@@ -67,11 +64,11 @@ class CustomerDetailFrame(ttk.Frame):
         self.columnconfigure(2, weight=1)
         self.rowconfigure(row, weight=1)
 
-        # On init, load last‐selected or newest
+        # Initial load
         self.load_customer()
 
     def load_customer(self, event=None) -> None:
-        """Load data for typed or last‐selected customer."""
+        """Load customer header + sales (including açıklama)."""
         raw = self.var_id.get().strip()
         if raw.isdigit():
             cust_id = int(raw)
@@ -95,34 +92,21 @@ class CustomerDetailFrame(ttk.Frame):
             phone = cust.phone or ""
             addr  = cust.address or ""
             sales = (
-                s.query(
-                    db.Sale.id,
-                    db.Sale.date,
-                    db.Sale.total,
-                    db.Sale.description,
-                )
-                .filter_by(customer_id=cust.id)
-                .order_by(db.Sale.date)
-                .all()
+                s.query(db.Sale.id, db.Sale.date, db.Sale.total, db.Sale.description)
+                 .filter_by(customer_id=cust.id)
+                 .order_by(db.Sale.date)
+                 .all()
             )
 
-        # Update header + global state
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
-        # Populate sales table
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
-                "",
-                "end",
-                values=(
-                    sid,
-                    dt_.strftime("%Y-%m-%d"),
-                    f"{tot:.2f}",
-                    desc or "",
-                ),
+                "", "end",
+                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
             )
