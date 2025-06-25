@@ -1,7 +1,6 @@
 # customer_search.py
 # Embedded list & filter of customers; shows most-recently created/selected first,
-# includes Kayıt Tarihi column, and filters on search.
-# Now split vertically, with bottom nav buttons to switch to other tabs,
+# split vertically, with bottom nav buttons to switch to other tabs,
 # buttons disabled until a row is selected.
 
 from __future__ import annotations
@@ -60,32 +59,38 @@ class CustomerSearchFrame(ttk.Frame):
         self.tree.bind("<Double-1>", self._load_detail)
         self.tree.bind("<Return>", self._load_detail)
 
-        # Initial load
-        self._load_all()
-
         # --- Bottom: Navigation buttons ---
         nav = ttk.Frame(self)
         nav.grid(row=2, column=0, columnspan=2, sticky="ew", pady=8)
-        for idx, weight in enumerate((1, 1, 1)):
-            nav.columnconfigure(idx, weight=weight)
+        for idx in range(3):
+            nav.columnconfigure(idx, weight=1)
 
         self.btn_edit = ttk.Button(
-            nav, text="Müşteri Bilgilerini Düzelt", command=self.go_to_edit, state="disabled"
+            nav,
+            text="Müşteri Bilgilerini Düzelt",
+            command=self.go_to_edit,
+            state="disabled"
         )
         self.btn_edit.grid(row=0, column=0, sticky="ew", padx=4)
 
         self.btn_sale = ttk.Button(
-            nav, text="Satış Kaydet", command=self.go_to_sale, state="disabled"
+            nav,
+            text="Satış Kaydet",
+            command=self.go_to_sale,
+            state="disabled"
         )
         self.btn_sale.grid(row=0, column=1, sticky="ew", padx=4)
 
         self.btn_detail = ttk.Button(
-            nav, text="Taksitli Satış Kayıt Bilgisi", command=self.go_to_detail, state="disabled"
+            nav,
+            text="Taksitli Satış Kayıt Bilgisi",
+            command=self.go_to_detail,
+            state="disabled"
         )
         self.btn_detail.grid(row=0, column=2, sticky="ew", padx=4)
 
-        # Initial button state
-        self.update_nav_buttons()
+        # Now that buttons exist, load initial data
+        self._load_all()
 
     def _load_all(self) -> None:
         """Load all customers, newest first, with last-selected on top."""
@@ -118,6 +123,8 @@ class CustomerSearchFrame(ttk.Frame):
                 "", "end",
                 values=(r.id, r.name, r.phone or "", reg_str, r.address or "")
             )
+
+        # Enable/disable nav buttons
         self.update_nav_buttons()
 
     def _on_filter(self, *_args) -> None:
@@ -163,7 +170,7 @@ class CustomerSearchFrame(ttk.Frame):
             btn.config(state=state)
 
     def _get_selected_cid(self) -> int | None:
-        """Return the customer ID of the selected row, or show warning."""
+        """Return the customer ID of the selected row, or None."""
         sel = self.tree.focus()
         if not sel:
             return None
@@ -183,7 +190,6 @@ class CustomerSearchFrame(ttk.Frame):
         cid = self._get_selected_cid()
         if cid is None:
             return
-        # set the ID and then load
         self.add_frame.var_id.set(str(cid))
         self.add_frame.load_customer()
         self.notebook.select(self.add_frame)
