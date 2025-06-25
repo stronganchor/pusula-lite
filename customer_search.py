@@ -175,13 +175,13 @@ class CustomerSearchFrame(ttk.Frame):
         return self.tree.item(sel)["values"][0]
 
     def _load_detail(self, event=None) -> None:
-        """Double-click or Enter: load into detail tab."""
+        """Double-click or Enter: load into detail tab using exact ID."""
         cid = self._get_selected_cid()
         if cid is None:
             return
-        # set the ID in the detail frame, then reload
-        self.detail_frame.var_id.set(str(cid))
-        self.detail_frame.load_customer()
+        app_state.last_customer_id = cid
+        # Pass the ID directly to load_customer
+        self.detail_frame.load_customer(cid)
         self.notebook.select(self.detail_frame)
 
     def go_to_edit(self) -> None:
@@ -202,11 +202,10 @@ class CustomerSearchFrame(ttk.Frame):
         self.notebook.select(self.sale_frame)
 
     def go_to_detail(self) -> None:
-        """Load selected customer into CustomerDetailFrame and switch tab."""
+        """Button: switch to detail tab for the selected customer."""
         cid = self._get_selected_cid()
         if cid is None:
             return
-        # same approach as above
-        self.detail_frame.var_id.set(str(cid))
-        self.detail_frame.load_customer()
+        app_state.last_customer_id = cid
+        self.detail_frame.load_customer(cid)
         self.notebook.select(self.detail_frame)
