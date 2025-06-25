@@ -122,21 +122,33 @@ class CustomerDetailFrame(ttk.Frame):
         self.load_customer()
 
     def load_customer(self, event=None) -> None:
-        """Load header + sales for a given customer,
-        then populate year list and report."""
-        raw = self.var_id.get().strip()
-        if raw.isdigit():
-            cust_id = int(raw)
+        """
+        Load header info and sales for a given customer.
+        If `event` is an int, treat it as the customer ID.
+        Otherwise, read from the entry or fall back to last-selected.
+        """
+        # Determine cust_id
+        if isinstance(event, int):
+            cust_id = event
         else:
-            cust_id = app_state.last_customer_id
-            if cust_id is None:
-                with db.session() as s:
-                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                    cust_id = rec[0] if rec else None
+            raw = self.var_id.get().strip()
+            if raw.isdigit():
+                cust_id = int(raw)
+            else:
+                cust_id = app_state.last_customer_id
+                if cust_id is None:
+                    with db.session() as s:
+                        rec = (
+                            s.query(db.Customer.id)
+                             .order_by(db.Customer.id.desc())
+                             .first()
+                        )
+                        cust_id = rec[0] if rec else None
 
         if cust_id is None:
             return
 
+        # Fetch customer and sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
@@ -158,23 +170,34 @@ class CustomerDetailFrame(ttk.Frame):
                 .all()
             )
 
+        # Update header + state
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
+        # Populate sales Treeview
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
                 "",
                 "end",
-                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
+                values=(
+                    sid,
+                    dt_.strftime("%Y-%m-%d"),
+                    f"{tot:.2f}",
+                    desc or "",
+                ),
             )
 
-        self.populate_years(cust_id)
-        self.load_report()
-
+        # Refresh report below if present
+        try:
+            self.populate_years(cust_id)
+            self.load_report()
+        except AttributeError:
+            pass
+            
     def populate_years(self, cust_id: int) -> None:
         """Fill the year Combobox based on installments for this customer."""
         this_year = date.today().year
