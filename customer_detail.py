@@ -33,7 +33,7 @@ class CustomerDetailFrame(ttk.Frame):
     Upper half: list of sales.
     Lower half: installment report by year/month, plus Ödeme on a single line."""
 
-        def __init__(self, master: tk.Misc | None = None) -> None:
+    def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
 
         # Header
