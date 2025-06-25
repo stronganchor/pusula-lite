@@ -1,7 +1,7 @@
 # sale_form.py
 # Record a sale and automatically create an instalment plan,
-# now with editable Müşteri No and non-editable name label,
-# and fixed StringVar initializations.
+# now with editable Müşteri No, non-editable name label,
+# and added 'Açıklama' Text field.
 
 from __future__ import annotations
 import datetime as dt
@@ -12,7 +12,6 @@ from tkinter import ttk, messagebox
 
 import db
 import app_state
-
 
 class SaleFrame(ttk.Frame):
     """Embedded form for recording a new sale with equal instalments."""
@@ -75,6 +74,12 @@ class SaleFrame(ttk.Frame):
         )
         row += 1
 
+        # --- Açıklama multi-line field ---
+        ttk.Label(self, text="Açıklama").grid(row=row, column=0, sticky="ne", **pad)
+        self.txt_description = tk.Text(self, width=60, height=4, wrap="word")
+        self.txt_description.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        row += 1
+
         # --- Action buttons ---
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=1, sticky="e", **pad
@@ -116,7 +121,7 @@ class SaleFrame(ttk.Frame):
         self.var_customer_name.set(name)
 
     def save(self) -> None:
-        """Validate fields, persist sale + instalments, update last-customer."""
+        """Validate fields, persist sale + instalments + açıklama, update last-customer."""
         raw = self.var_customer_id.get().strip()
         if not raw.isdigit():
             messagebox.showwarning("Eksik Bilgi", "Geçerli müşteri numarası giriniz.")
@@ -149,16 +154,13 @@ class SaleFrame(ttk.Frame):
         inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
 
         with db.session() as s:
-            sale = db.Sale(date=sale_date, customer_id=cust_id, total=total)
+            desc = self.txt_description.get("1.0", tk.END).strip()
+            sale = db.Sale(date=sale_date, customer_id=cust_id, total=total, description=desc)
             s.add(sale)
             s.flush()
             for i in range(1, n_inst + 1):
                 due = sale_date + dt.timedelta(days=30 * i)
-                s.add(
-                    db.Installment(
-                        sale_id=sale.id, due_date=due, amount=inst_amount, paid=0
-                    )
-                )
+                s.add(db.Installment(sale_id=sale.id, due_date=due, amount=inst_amount, paid=0))
 
         messagebox.showinfo("Başarılı", "Satış ve taksitler kaydedildi.")
         app_state.last_customer_id = cust_id
@@ -171,3 +173,4 @@ class SaleFrame(ttk.Frame):
         self.var_total.set("")
         self.var_down.set("0")
         self.var_n_inst.set("1")
+        self.txt_description.delete("1.0", tk.END)
