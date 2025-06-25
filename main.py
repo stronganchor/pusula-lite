@@ -31,7 +31,7 @@ class PusulaLiteApp(tk.Tk):
         self.tab_search = CustomerSearchFrame(
             self.notebook,
             notebook=self.notebook,
-            detail_frame=None  # will be wired below
+            detail_frame=None  # will wire below
         )
         self.tab_add    = AddCustomerFrame(self.notebook)
         self.tab_sale   = SaleFrame(self.notebook)
@@ -39,6 +39,8 @@ class PusulaLiteApp(tk.Tk):
 
         # Wire cross-tab references
         self.tab_search.detail_frame = self.tab_detail
+        self.tab_search.add_frame    = self.tab_add
+        self.tab_search.sale_frame   = self.tab_sale
         self.tab_add.sale_frame      = self.tab_sale
 
         # Add tabs in order
@@ -53,18 +55,17 @@ class PusulaLiteApp(tk.Tk):
         # On startup, load detail for last‐selected or newest customer
         self.tab_detail.load_customer()
 
-        # Refresh search/detail when their tab is selected
+        # Whenever user switches tabs, refresh search/detail
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
     def on_tab_changed(self, event) -> None:
         """Refresh the search list or detail view when its tab is selected."""
         current = self.notebook.nametowidget(self.notebook.select())
         if current is self.tab_search:
-            # reload full customer list, with last-selected first
             self.tab_search._load_all()
         elif current is self.tab_detail:
-            # reload detail for the current last-selected customer
             self.tab_detail.load_customer()
+
 
 if __name__ == "__main__":
     app = PusulaLiteApp()
