@@ -41,7 +41,7 @@ class PusulaLiteApp(tk.Tk):
         self.tab_search.detail_frame = self.tab_detail
         self.tab_add.sale_frame      = self.tab_sale
 
-        # Add tabs in order (removed F1/F2/F3 labels)
+        # Add tabs in order
         self.notebook.add(self.tab_search, text="Müşteri Arama")
         self.notebook.add(self.tab_add,    text="Müşteri Tanıtım Bilgileri")
         self.notebook.add(self.tab_sale,   text="Satış Kaydet")
@@ -53,6 +53,18 @@ class PusulaLiteApp(tk.Tk):
         # On startup, load detail for last‐selected or newest customer
         self.tab_detail.load_customer()
 
+        # Refresh search/detail when their tab is selected
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+    def on_tab_changed(self, event) -> None:
+        """Refresh the search list or detail view when its tab is selected."""
+        current = self.notebook.nametowidget(self.notebook.select())
+        if current is self.tab_search:
+            # reload full customer list, with last-selected first
+            self.tab_search._load_all()
+        elif current is self.tab_detail:
+            # reload detail for the current last-selected customer
+            self.tab_detail.load_customer()
 
 if __name__ == "__main__":
     app = PusulaLiteApp()
