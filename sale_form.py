@@ -1,7 +1,7 @@
 # sale_form.py
 # Record a sale and automatically create an instalment plan,
 # now with editable Müşteri No, non-editable name label,
-# and added 'Açıklama' Text field.
+# and added 'Açıklama' Text field plus select_customer().
 
 from __future__ import annotations
 import datetime as dt
@@ -20,8 +20,8 @@ class SaleFrame(ttk.Frame):
         super().__init__(master, padding=8)
 
         # State variables
-        self.var_customer_id   = tk.StringVar()  # editable ID
-        self.var_customer_name = tk.StringVar(value="(seçilmedi)")  # readonly name
+        self.var_customer_id   = tk.StringVar()
+        self.var_customer_name = tk.StringVar(value="(seçilmedi)")
         self.var_date          = tk.StringVar(value=dt.date.today().isoformat())
         self.var_total         = tk.StringVar()
         self.var_down          = tk.StringVar(value="0")
@@ -30,31 +30,26 @@ class SaleFrame(ttk.Frame):
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        # --- Customer selector via ID entry + name label ---
+        # Customer selector
         ttk.Label(self, text="Müşteri No *").grid(row=row, column=0, sticky="e", **pad)
         ent_id = ttk.Entry(self, textvariable=self.var_customer_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
         ent_id.bind("<FocusOut>", self.load_customer)
-
         ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=2, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_customer_name).grid(
             row=row, column=3, sticky="w", **pad
         )
         row += 1
 
-        # --- Date ---
-        ttk.Label(self, text="Tarih (YYYY-MM-DD)").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        # Date
+        ttk.Label(self, text="Tarih (YYYY-MM-DD)").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_date, width=15).grid(
             row=row, column=1, sticky="w", **pad
         )
         row += 1
 
-        # --- Amounts ---
-        ttk.Label(self, text="Toplam Tutar *").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        # Amounts
+        ttk.Label(self, text="Toplam Tutar *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_total, width=15).grid(
             row=row, column=1, sticky="w", **pad
         )
@@ -66,21 +61,19 @@ class SaleFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Label(self, text="Taksit Sayısı *").grid(
-            row=row, column=0, sticky="e", **pad
-        )
+        ttk.Label(self, text="Taksit Sayısı *").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(self, textvariable=self.var_n_inst, width=5).grid(
             row=row, column=1, sticky="w", **pad
         )
         row += 1
 
-        # --- Açıklama multi-line field ---
+        # Açıklama
         ttk.Label(self, text="Açıklama").grid(row=row, column=0, sticky="ne", **pad)
         self.txt_description = tk.Text(self, width=60, height=4, wrap="word")
         self.txt_description.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
         row += 1
 
-        # --- Action buttons ---
+        # Buttons
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=1, sticky="e", **pad
         )
@@ -89,11 +82,11 @@ class SaleFrame(ttk.Frame):
         )
         self.bind_all("<F10>", lambda e: self.save())
 
-        # On init, load with last‐selected or most‐recent
+        # Load default customer
         self.load_customer()
 
     def load_customer(self, event=None) -> None:
-        """Load customer by entered ID or fallback to last/newest."""
+        """Load by ID or fallback to last/newest."""
         raw = self.var_customer_id.get().strip()
         if raw.isdigit():
             cid = int(raw)
@@ -121,7 +114,7 @@ class SaleFrame(ttk.Frame):
         self.var_customer_name.set(name)
 
     def save(self) -> None:
-        """Validate fields, persist sale + instalments + açıklama, update last-customer."""
+        """Validate inputs, save sale + installments + açıklama."""
         raw = self.var_customer_id.get().strip()
         if not raw.isdigit():
             messagebox.showwarning("Eksik Bilgi", "Geçerli müşteri numarası giriniz.")
@@ -155,12 +148,22 @@ class SaleFrame(ttk.Frame):
 
         with db.session() as s:
             desc = self.txt_description.get("1.0", tk.END).strip()
-            sale = db.Sale(date=sale_date, customer_id=cust_id, total=total, description=desc)
+            sale = db.Sale(
+                date=sale_date,
+                customer_id=cust_id,
+                total=total,
+                description=desc
+            )
             s.add(sale)
             s.flush()
             for i in range(1, n_inst + 1):
                 due = sale_date + dt.timedelta(days=30 * i)
-                s.add(db.Installment(sale_id=sale.id, due_date=due, amount=inst_amount, paid=0))
+                s.add(db.Installment(
+                    sale_id=sale.id,
+                    due_date=due,
+                    amount=inst_amount,
+                    paid=0
+                ))
 
         messagebox.showinfo("Başarılı", "Satış ve taksitler kaydedildi.")
         app_state.last_customer_id = cust_id
@@ -168,9 +171,14 @@ class SaleFrame(ttk.Frame):
         self.load_customer()
 
     def clear_all(self) -> None:
-        """Reset only the sale-specific fields (keeping customer loaded)."""
+        """Reset sale-specific fields (keep customer)."""
         self.var_date.set(dt.date.today().isoformat())
         self.var_total.set("")
         self.var_down.set("0")
         self.var_n_inst.set("1")
         self.txt_description.delete("1.0", tk.END)
+
+    def select_customer(self, cid: int) -> None:
+        """Called by customer_form: set and load given customer."""
+        self.var_customer_id.set(str(cid))
+        self.load_customer()
