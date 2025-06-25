@@ -1,6 +1,6 @@
 # customer_detail.py
-# Static "Taksitli Satış Kayıt Bilgisi" tab — load/edit by customer number,
-# with lower-half report of installments by month/year.
+# Static “Taksitli Satış Kayıt Bilgisi” tab — upper half: sales list;
+# lower half: installment report + ödeme recording.
 
 from __future__ import annotations
 
@@ -8,13 +8,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import calendar
 from datetime import date
+import decimal
 
 from sqlalchemy import func
 
 import db
 import app_state
-
-import decimal
 
 # Turkish month names, index 1–12
 TURKISH_MONTHS = [
@@ -22,22 +21,27 @@ TURKISH_MONTHS = [
     "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
 ]
 
-
 class CustomerDetailFrame(ttk.Frame):
     """Shows header info + sales list for a customer.
-    Upper half: list of sales. Lower half: installment report by year/month."""
+    Upper half: list of sales.
+    Lower half: installment report by year/month, plus Ödeme section."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
 
         # Header variables
-        self.var_id      = tk.StringVar()
-        self.var_name    = tk.StringVar()
-        self.var_phone   = tk.StringVar()
-        self.var_address = tk.StringVar()
+        self.var_id        = tk.StringVar()
+        self.var_name      = tk.StringVar()
+        self.var_phone     = tk.StringVar()
+        self.var_address   = tk.StringVar()
 
         # Report variables
-        self.report_year_var = tk.StringVar()
+        self.report_year_var   = tk.StringVar()
+        self.var_total_debt    = tk.StringVar()
+
+        # Ödeme variables
+        self.payment_month_var  = tk.StringVar(value=TURKISH_MONTHS[date.today().month])
+        self.payment_amount_var = tk.StringVar()
 
         pad = {"padx": 8, "pady": 4}
         row = 0
@@ -66,33 +70,31 @@ class CustomerDetailFrame(ttk.Frame):
         row += 1
 
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=3, sticky="ew", **pad
+            row=row, column=0, columnspan=4, sticky="ew", **pad
         )
         row += 1
 
         # — Sales table (upper half) —
         cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
-        for col, txt, w in zip(
-            cols,
-            ("No", "Tarih", "Toplam Tutar", "Açıklama"),
-            (60, 100, 120, 300),
-        ):
+        headings = ("No", "Tarih", "Toplam Tutar", "Açıklama")
+        widths   = (60,     100,        120,            300)
+        for col, txt, w in zip(cols, headings, widths):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor="center")
 
-        self.tree.grid(row=row, column=0, columnspan=3, sticky="nsew", **pad)
-        self.columnconfigure(2, weight=1)
+        self.tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        self.columnconfigure(3, weight=1)
         self.rowconfigure(row, weight=1)
         row += 1
 
         # — Separator to report —
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=3, sticky="ew", **pad
+            row=row, column=0, columnspan=4, sticky="ew", **pad
         )
         row += 1
 
-        # — Report controls —
+        # — Report controls: Year + Toplam Borç —
         ttk.Label(self, text="Yıl:").grid(row=row, column=0, sticky="e", **pad)
         self.cmb_year = ttk.Combobox(
             self,
@@ -102,141 +104,141 @@ class CustomerDetailFrame(ttk.Frame):
         )
         self.cmb_year.grid(row=row, column=1, sticky="w", **pad)
         self.cmb_year.bind("<<ComboboxSelected>>", lambda e: self.load_report())
+
+        ttk.Label(self, text="Toplam Borç:").grid(row=row, column=2, sticky="e", **pad)
+        ttk.Label(self, textvariable=self.var_total_debt).grid(
+            row=row, column=3, sticky="w", **pad
+        )
         row += 1
 
         # — Installment report table (lower half) —
         rep_cols = ("month", "amount", "paid")
         self.report_tree = ttk.Treeview(self, columns=rep_cols, show="headings", height=8)
-        for col, txt, w in zip(
-            rep_cols,
-            ("Ay", "Tutar", "Ödendi"),
-            (150, 100, 80),
-        ):
+        rep_headings = ("Ay", "Tutar", "Ödendi")
+        rep_widths   = (150,    100,     80)
+        for col, txt, w in zip(rep_cols, rep_headings, rep_widths):
             self.report_tree.heading(col, text=txt)
             self.report_tree.column(col, width=w, anchor="center")
 
-        self.report_tree.grid(row=row, column=0, columnspan=3, sticky="nsew", **pad)
+        self.report_tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.rowconfigure(row, weight=1)
+        row += 1
+
+        # — Separator to Ödeme section —
+        ttk.Separator(self, orient="horizontal").grid(
+            row=row, column=0, columnspan=4, sticky="ew", **pad
+        )
+        row += 1
+
+        # — Ödeme section —
+        ttk.Label(self, text="Ödeme Ayı:").grid(row=row, column=0, sticky="e", **pad)
+        self.cmb_pay_month = ttk.Combobox(
+            self,
+            textvariable=self.payment_month_var,
+            values=TURKISH_MONTHS[1:],
+            state="readonly",
+            width=10
+        )
+        self.cmb_pay_month.grid(row=row, column=1, sticky="w", **pad)
+        self.cmb_pay_month.bind("<<ComboboxSelected>>", lambda e: self.update_payment_amount())
+        row += 1
+
+        ttk.Label(self, text="Tutar:").grid(row=row, column=0, sticky="e", **pad)
+        ttk.Entry(self, textvariable=self.payment_amount_var, width=12).grid(
+            row=row, column=1, sticky="w", **pad
+        )
+        row += 1
+
+        ttk.Button(self, text="Kaydet Ödeme", command=self.save_payment).grid(
+            row=row, column=1, sticky="w", **pad
+        )
 
         # Initial load
         self.load_customer()
 
-    def load_customer(self, event=None) -> None:
-        """
-        Load header info and sales for a given customer.
-        If `event` is an int, treat it as the customer ID.
-        Otherwise, read from the entry or fall back to last-selected.
-        """
-        # Determine cust_id
-        if isinstance(event, int):
-            cust_id = event
-        else:
-            raw = self.var_id.get().strip()
-            if raw.isdigit():
-                cust_id = int(raw)
-            else:
-                cust_id = app_state.last_customer_id
-                if cust_id is None:
-                    with db.session() as s:
-                        rec = (
-                            s.query(db.Customer.id)
-                             .order_by(db.Customer.id.desc())
-                             .first()
-                        )
-                        cust_id = rec[0] if rec else None
 
+    def load_customer(self, event=None) -> None:
+        """Load header + sales and then populate report and ödeme defaults."""
+        raw = self.var_id.get().strip()
+        if raw.isdigit():
+            cust_id = int(raw)
+        else:
+            cust_id = app_state.last_customer_id
+            if cust_id is None:
+                with db.session() as s:
+                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
+                    cust_id = rec[0] if rec else None
         if cust_id is None:
             return
 
-        # Fetch customer and sales
+        # Load header + sales
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
             if not cust:
                 messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
                 return
-
-            name  = cust.name or ""
-            phone = cust.phone or ""
-            addr  = cust.address or ""
+            name, phone, addr = cust.name or "", cust.phone or "", cust.address or ""
             sales = (
-                s.query(
-                    db.Sale.id,
-                    db.Sale.date,
-                    db.Sale.total,
-                    db.Sale.description,
-                )
-                .filter_by(customer_id=cust_id)
-                .order_by(db.Sale.date)
-                .all()
+                s.query(db.Sale.id, db.Sale.date, db.Sale.total, db.Sale.description)
+                 .filter_by(customer_id=cust_id)
+                 .order_by(db.Sale.date)
+                 .all()
             )
 
-        # Update header + state
         self.var_id.set(str(cust_id))
         self.var_name.set(name)
         self.var_phone.set(phone)
         self.var_address.set(addr)
         app_state.last_customer_id = cust_id
 
-        # Populate sales Treeview
+        # Populate sales table
         self.tree.delete(*self.tree.get_children())
         for sid, dt_, tot, desc in sales:
             self.tree.insert(
-                "",
-                "end",
-                values=(
-                    sid,
-                    dt_.strftime("%Y-%m-%d"),
-                    f"{tot:.2f}",
-                    desc or "",
-                ),
+                "", "end",
+                values=(sid, dt_.strftime("%Y-%m-%d"), f"{tot:.2f}", desc or "")
             )
 
-        # Refresh report below if present
-        try:
-            self.populate_years(cust_id)
-            self.load_report()
-        except AttributeError:
-            pass
-            
+        # Populate year combobox & report
+        self.populate_years(cust_id)
+        self.load_report()
+
+
     def populate_years(self, cust_id: int) -> None:
-        """Fill the year Combobox based on installments for this customer."""
+        """Fill year list based on installments, default to current year."""
         this_year = date.today().year
         with db.session() as s:
             years = {
                 inst.due_date.year
-                for sale in s.query(db.Sale).filter_by(customer_id=cust_id).all()
+                for sale in s.query(db.Sale).filter_by(customer_id=cust_id)
                 for inst in sale.installments
             }
         if not years:
             years = {this_year}
-        sorted_years = sorted(years)
-        self.cmb_year["values"] = sorted_years
-        default = this_year if this_year in sorted_years else sorted_years[-1]
+        vals = sorted(years)
+        self.cmb_year["values"] = vals
+        default = this_year if this_year in vals else vals[-1]
         self.report_year_var.set(str(default))
 
+
     def load_report(self) -> None:
-        """Load a combined monthly installment report for the selected customer and year."""
+        """Load combined monthly report and update toplam borç & payment defaults."""
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
 
-        # fetch raw due_date, amount, paid for every installment in that year
         with db.session() as s:
             rows = (
-                s.query(
-                    db.Installment.due_date,
-                    db.Installment.amount,
-                    db.Installment.paid,
-                )
-                .join(db.Sale)
-                .filter(
-                    db.Sale.customer_id == cust_id,
-                    func.strftime("%Y", db.Installment.due_date) == str(year)
-                )
-                .order_by(db.Installment.due_date)
-                .all()
+                s.query(db.Installment.due_date, db.Installment.amount, db.Installment.paid)
+                 .join(db.Sale)
+                 .filter(
+                     db.Sale.customer_id == cust_id,
+                     func.strftime("%Y", db.Installment.due_date) == str(year)
+                 )
+                 .order_by(db.Installment.due_date)
+                 .all()
             )
 
-        # group by month
+        # Group by month
         grouped: dict[int, dict[str, decimal.Decimal | bool]] = {}
         for due_date, amount, paid in rows:
             m = due_date.month
@@ -246,17 +248,55 @@ class CustomerDetailFrame(ttk.Frame):
             if not paid:
                 grouped[m]["all_paid"] = False
 
-        # repopulate the tree
+        # Update toplam borç (sum of unpaid for year)
+        total_debt = sum(v["total"] for v in grouped.values() if not v["all_paid"])
+        self.var_total_debt.set(f"{total_debt:.2f}")
+
+        # Populate report tree
         self.report_tree.delete(*self.report_tree.get_children())
         for m in sorted(grouped):
             total = grouped[m]["total"]
             paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
             self.report_tree.insert(
-                "",
-                "end",
-                values=(
-                    TURKISH_MONTHS[m],
-                    f"{total:.2f}",
-                    paid_str
-                )
+                "", "end",
+                values=(TURKISH_MONTHS[m], f"{total:.2f}", paid_str)
             )
+
+        # Set default payment amount for selected month
+        self.current_grouped = grouped
+        self.update_payment_amount()
+
+
+    def update_payment_amount(self) -> None:
+        """Set payment_amount_var to the grouped total for the chosen month."""
+        month_name = self.payment_month_var.get()
+        if not month_name:
+            return
+        m = TURKISH_MONTHS.index(month_name)
+        amt = self.current_grouped.get(m, {}).get("total", decimal.Decimal("0.00"))
+        self.payment_amount_var.set(f"{amt:.2f}")
+
+
+    def save_payment(self) -> None:
+        """Mark all installments for the selected year+month as paid."""
+        cust_id = int(self.var_id.get())
+        year = int(self.report_year_var.get())
+        month_name = self.payment_month_var.get()
+        m = TURKISH_MONTHS.index(month_name)
+
+        with db.session() as s:
+            insts = (
+                s.query(db.Installment)
+                 .join(db.Sale)
+                 .filter(
+                     db.Sale.customer_id == cust_id,
+                     func.strftime("%Y", db.Installment.due_date) == str(year),
+                     func.strftime("%m", db.Installment.due_date) == f"{m:02d}"
+                 )
+                 .all()
+            )
+            for inst in insts:
+                inst.paid = 1
+
+        messagebox.showinfo("Ödeme Kaydedildi", f"{month_name} taksitleri ödendi.")
+        self.load_report()
