@@ -33,7 +33,7 @@ class CustomerDetailFrame(ttk.Frame):
     Upper half: list of sales.
     Lower half: installment report by year/month, plus Ödeme on a single line."""
 
-    def __init__(self, master: tk.Misc | None = None) -> None:
+        def __init__(self, master: tk.Misc | None = None) -> None:
         super().__init__(master, padding=8)
 
         # Header
@@ -81,15 +81,14 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Sales table (upper half) —
+        # — Sales table (upper half, taller) —
         cols = ("sale_id", "tarih", "tutar", "aciklama")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
+        self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
         headings = ("No", "Tarih", "Toplam Tutar", "Açıklama")
-        widths   = (60,   100,           120,           300)
+        widths   = (60,    100,         120,            300)
         for col, txt, w in zip(cols, headings, widths):
             self.tree.heading(col, text=txt)
             self.tree.column(col, width=w, anchor="center")
-
         self.tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.columnconfigure(3, weight=1)
         self.rowconfigure(row, weight=1)
@@ -101,13 +100,10 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Report controls: Year + Toplam Borç —
+        # — Report controls —
         ttk.Label(self, text="Yıl:").grid(row=row, column=0, sticky="e", **pad)
         self.cmb_year = ttk.Combobox(
-            self,
-            textvariable=self.report_year_var,
-            state="readonly",
-            width=6
+            self, textvariable=self.report_year_var, state="readonly", width=6
         )
         self.cmb_year.grid(row=row, column=1, sticky="w", **pad)
         self.cmb_year.bind("<<ComboboxSelected>>", lambda e: self.load_report())
@@ -118,50 +114,51 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Installment report table (lower half) —
+        # — Installment report table (lower half, taller) —
         rep_cols = ("month", "amount", "paid")
-        self.report_tree = ttk.Treeview(self, columns=rep_cols, show="headings", height=8)
+        self.report_tree = ttk.Treeview(self, columns=rep_cols, show="headings", height=10)
         rep_headings = ("Ay", "Tutar", "Ödendi")
         rep_widths   = (150,    100,     80)
         for col, txt, w in zip(rep_cols, rep_headings, rep_widths):
             self.report_tree.heading(col, text=txt)
             self.report_tree.column(col, width=w, anchor="center")
-
         self.report_tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.rowconfigure(row, weight=1)
         row += 1
 
         # — Separator to Ödeme section —
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=5, sticky="ew", **pad
+            row=row, column=0, columnspan=4, sticky="ew", **pad
         )
         row += 1
 
-        # — Ödeme section (one line) —
-        self.columnconfigure(4, weight=1)
-        ttk.Label(self, text="Ödeme Ayı:").grid(row=row, column=0, sticky="e", **pad)
+        # — Ödeme section all on one line, tighter spacing —
+        pay_frame = ttk.Frame(self)
+        pay_frame.grid(row=row, column=0, columnspan=4, sticky="w", pady=(2,4))
+
+        ttk.Label(pay_frame, text="Ödeme Ayı:").grid(row=0, column=0, padx=4, pady=2)
         self.cmb_pay_month = ttk.Combobox(
-            self,
+            pay_frame,
             textvariable=self.payment_month_var,
             values=TURKISH_MONTHS[1:],
             state="readonly",
             width=10
         )
-        self.cmb_pay_month.grid(row=row, column=1, sticky="w", **pad)
+        self.cmb_pay_month.grid(row=0, column=1, padx=4, pady=2)
         self.cmb_pay_month.bind("<<ComboboxSelected>>", lambda e: self.update_payment_amount())
 
-        ttk.Label(self, text="Tutar:").grid(row=row, column=2, sticky="e", **pad)
+        ttk.Label(pay_frame, text="Tutar:").grid(row=0, column=2, padx=4, pady=2)
         self.entry_pay_amount = ttk.Entry(
-            self, textvariable=self.payment_amount_var, width=15
+            pay_frame, textvariable=self.payment_amount_var, width=15
         )
-        self.entry_pay_amount.grid(row=row, column=3, sticky="w", **pad)
+        self.entry_pay_amount.grid(row=0, column=3, padx=4, pady=2)
 
         self.btn_save_payment = ttk.Button(
-            self, text="Kaydet Ödeme", command=self.save_payment
+            pay_frame, text="Ödemeyi Kaydet", command=self.save_payment
         )
-        self.btn_save_payment.grid(row=row, column=4, sticky="w", **pad)
+        self.btn_save_payment.grid(row=0, column=4, padx=4, pady=2)
 
-        # Initial load
+        # Initial population
         self.load_customer()
 
 
