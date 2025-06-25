@@ -75,7 +75,7 @@ class CustomerDetailFrame(ttk.Frame):
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=8)
         for col, txt, w in zip(
             cols,
-            ("ID", "Tarih", "Toplam Tutar", "Açıklama"),
+            ("No", "Tarih", "Toplam Tutar", "Açıklama"),
             (60, 100, 120, 300),
         ):
             self.tree.heading(col, text=txt)
