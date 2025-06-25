@@ -12,8 +12,6 @@ import db
 import app_state
 
 class CustomerSearchFrame(ttk.Frame):
-    """List + filter customers; bottom half has navigation buttons."""
-
     def __init__(
         self,
         master: tk.Misc,
@@ -25,25 +23,25 @@ class CustomerSearchFrame(ttk.Frame):
         self.notebook     = notebook
         self.detail_frame = detail_frame
 
-        # Make the Treeview expand
+        # layout config…
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        # --- Top: Search bar + Treeview ---
+        # Top: search bar…
         frm = ttk.Frame(self)
         frm.grid(row=0, column=0, sticky="ew", pady=4)
         frm.columnconfigure(1, weight=1)
-
         ttk.Label(frm, text="Ara (isim/telefon/adres):").grid(row=0, column=0)
         self.search_var = tk.StringVar()
-        entry = ttk.Entry(frm, textvariable=self.search_var)
-        entry.grid(row=0, column=1, sticky="ew")
+        ttk.Entry(frm, textvariable=self.search_var).grid(row=0, column=1, sticky="ew")
         self.search_var.trace_add("write", self._on_filter)
 
+        # Treeview columns
         cols = ("id", "name", "phone", "reg_date", "address")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
-        headings = ("ID", "İsim", "Telefon", "Kayıt Tarihi", "Adres")
-        widths   = (60, 180, 120, 100, 240)
+        # Changed "ID" → "No"
+        headings = ("No", "İsim", "Telefon", "Kayıt Tarihi", "Adres")
+        widths   = (60,   180,     120,       100,           240)
         for col, txt, w in zip(cols, headings, widths):
             anchor = "center" if col in ("id", "reg_date") else "w"
             self.tree.heading(col, text=txt)
