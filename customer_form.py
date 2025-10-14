@@ -149,7 +149,7 @@ class AddCustomerFrame(ttk.Frame):
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=2, sticky="e", **pad
         )
-        ttk.Button(self, text="Vazgeç", command=self.clear_all).grid(
+        ttk.Button(self, text="Vazgeç", command=self.cancel).grid(
             row=row, column=3, sticky="w", **pad
         )
         self.bind_all("<F10>", lambda e: self.save())
@@ -291,3 +291,8 @@ class AddCustomerFrame(ttk.Frame):
         ]:
             var.set("")
         self._new_customer_defaults()
+        
+    def cancel(self) -> None:
+        """Cancel and return to customer search tab."""
+        self.clear_all()
+        self.master.select(self.search_frame)
