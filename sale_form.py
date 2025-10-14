@@ -77,7 +77,7 @@ class SaleFrame(ttk.Frame):
         ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
             row=row, column=1, sticky="e", **pad
         )
-        ttk.Button(self, text="Vazgeç", command=self.clear_all).grid(
+        ttk.Button(self, text="Vazgeç", command=self.cancel).grid(
             row=row, column=2, sticky="w", **pad
         )
         self.bind_all("<F10>", lambda e: self.save())
@@ -178,6 +178,11 @@ class SaleFrame(ttk.Frame):
         self.var_n_inst.set("1")
         self.txt_description.delete("1.0", tk.END)
 
+    def cancel(self) -> None:
+        """Cancel and return to customer search tab."""
+        self.clear_all()
+        self.master.select(self.search_frame)
+    
     def select_customer(self, cid: int) -> None:
         """Called by customer_form: set and load given customer."""
         self.var_customer_id.set(str(cid))
