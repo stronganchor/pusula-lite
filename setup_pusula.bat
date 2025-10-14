@@ -37,24 +37,44 @@ if not exist "data" mkdir data
 
 echo.
 echo === Step 5: Locate pythonw.exe ===
-for /f "delims=" %%i in ('where python 2^>nul') do set PYTHON_PATH=%%i
-if not defined PYTHON_PATH (
-    echo ERROR: Cannot find python.exe in PATH
-    pause
-    exit /b 1
+REM Try to use py.exe launcher to find real Python installation
+set PYTHONW_PATH=
+for /f "delims=" %%i in ('py -c "import sys; print(sys.executable)" 2^>nul') do set PYTHON_PATH=%%i
+
+if defined PYTHON_PATH (
+    REM Get the directory and find pythonw.exe
+    for %%i in ("%PYTHON_PATH%") do set PYTHON_DIR=%%~dpi
+    set PYTHONW_PATH=!PYTHON_DIR!pythonw.exe
+
+    if exist "!PYTHONW_PATH!" (
+        echo Found: !PYTHONW_PATH!
+    ) else (
+        echo pythonw.exe not found, using python.exe
+        set PYTHONW_PATH=!PYTHON_PATH!
+    )
+) else (
+    REM Fallback: search PATH for python.exe, excluding WindowsApps
+    for /f "delims=" %%i in ('where python 2^>nul') do (
+        set TEST_PATH=%%i
+        echo !TEST_PATH! | findstr /i /v "WindowsApps" >nul
+        if !errorlevel! equ 0 (
+            set PYTHON_PATH=%%i
+            goto :found_python
+        )
+    )
+    :found_python
+
+    if defined PYTHON_PATH (
+        for %%i in ("!PYTHON_PATH!") do set PYTHON_DIR=%%~dpi
+        set PYTHONW_PATH=!PYTHON_DIR!pythonw.exe
+        if not exist "!PYTHONW_PATH!" set PYTHONW_PATH=!PYTHON_PATH!
+        echo Found: !PYTHONW_PATH!
+    ) else (
+        echo ERROR: Cannot find Python installation
+        pause
+        exit /b 1
+    )
 )
-
-REM Get the directory containing python.exe
-for %%i in ("%PYTHON_PATH%") do set PYTHON_DIR=%%~dpi
-set PYTHONW_PATH=%PYTHON_DIR%pythonw.exe
-
-if not exist "%PYTHONW_PATH%" (
-    echo ERROR: pythonw.exe not found at %PYTHONW_PATH%
-    echo Using python.exe instead ^(command window will be visible^)
-    set PYTHONW_PATH=%PYTHON_PATH%
-)
-
-echo Found: %PYTHONW_PATH%
 
 echo.
 echo === Step 6: Create desktop shortcut ===
