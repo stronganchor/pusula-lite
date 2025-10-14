@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox
 
 import db
 import app_state
+import receipt_printer
 
 class SaleFrame(ttk.Frame):
     """Embedded form for recording a new sale with equal instalments."""
@@ -174,19 +175,19 @@ class SaleFrame(ttk.Frame):
             messagebox.showwarning("Eksik Bilgi", "Geçerli müşteri numarası giriniz.")
             return
         cust_id = int(raw)
-
+    
         with db.session() as s:
             cust = s.get(db.Customer, cust_id)
         if not cust:
             messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
             return
-
+    
         try:
             sale_date = dt.date.fromisoformat(self.var_date.get())
         except ValueError:
             messagebox.showwarning("Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır.")
             return
-
+    
         try:
             total = Decimal(self.var_total.get())
             down = Decimal(self.var_down.get())
@@ -196,10 +197,11 @@ class SaleFrame(ttk.Frame):
         except (InvalidOperation, ValueError):
             messagebox.showwarning("Hatalı Giriş", "Tutarlar geçerli sayı olmalıdır.")
             return
-
+    
         remaining = total - down
         inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
-
+    
+        # Save sale
         with db.session() as s:
             desc = self.txt_description.get("1.0", tk.END).strip()
             sale = db.Sale(
@@ -210,6 +212,7 @@ class SaleFrame(ttk.Frame):
             )
             s.add(sale)
             s.flush()
+            sale_id = sale.id
             for i in range(1, n_inst + 1):
                 due = sale_date + dt.timedelta(days=30 * i)
                 s.add(db.Installment(
@@ -218,8 +221,16 @@ class SaleFrame(ttk.Frame):
                     amount=inst_amount,
                     paid=0
                 ))
-
-        messagebox.showinfo("Başarılı", "Satış ve taksitler kaydedildi.")
+    
+        # Ask if user wants to print receipt
+        response = messagebox.askyesno(
+            "Başarılı",
+            "Satış ve taksitler kaydedildi.\n\nSatış makbuzunu yazdırmak ister misiniz?"
+        )
+    
+        if response:
+            receipt_printer.print_receipt(sale_id)
+    
         app_state.last_customer_id = cust_id
         self.clear_all()
         self.load_customer()
