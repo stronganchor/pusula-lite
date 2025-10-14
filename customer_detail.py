@@ -1,13 +1,13 @@
 # customer_detail.py
-# Static “Taksitli Satış Kayıt Bilgisi” tab — upper half: sales list;
+# Static "Taksitli Satış Kayıt Bilgisi" tab – upper half: sales list;
 # lower half: installment report + ödeme recording.
 
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import calendar
-from datetime import date
+from datetime import date, datetime
 import decimal
 
 from sqlalchemy import func
@@ -27,6 +27,89 @@ def format_currency(amount: decimal.Decimal) -> str:
     integer, dec = s.split(".")        # ["1,000,000","00"]
     integer = integer.replace(",", ".")
     return f"{integer},{dec}₺"
+
+def parse_currency(text: str) -> decimal.Decimal:
+    """Parse Turkish currency format back to Decimal."""
+    # Remove ₺ symbol and spaces
+    text = text.replace("₺", "").replace(" ", "")
+    # Replace . with nothing (thousands separator)
+    text = text.replace(".", "")
+    # Replace , with . (decimal separator)
+    text = text.replace(",", ".")
+    return decimal.Decimal(text)
+
+
+class SaleEditDialog(tk.Toplevel):
+    """Dialog for editing sale details."""
+
+    def __init__(self, parent, sale_id: int, current_date: date, current_total: decimal.Decimal, current_desc: str):
+        super().__init__(parent)
+        self.title("Satışı Düzelt")
+        self.geometry("500x250")
+        self.resizable(False, False)
+
+        self.result = None
+        self.sale_id = sale_id
+
+        pad = {"padx": 8, "pady": 4}
+
+        # Date
+        ttk.Label(self, text="Tarih (YYYY-MM-DD):").grid(row=0, column=0, sticky="e", **pad)
+        self.var_date = tk.StringVar(value=current_date.strftime("%Y-%m-%d"))
+        ttk.Entry(self, textvariable=self.var_date, width=15).grid(row=0, column=1, sticky="w", **pad)
+
+        # Total
+        ttk.Label(self, text="Toplam Tutar:").grid(row=1, column=0, sticky="e", **pad)
+        self.var_total = tk.StringVar(value=str(current_total))
+        ttk.Entry(self, textvariable=self.var_total, width=15).grid(row=1, column=1, sticky="w", **pad)
+
+        # Description
+        ttk.Label(self, text="Açıklama:").grid(row=2, column=0, sticky="ne", **pad)
+        self.txt_desc = tk.Text(self, width=40, height=6, wrap="word")
+        self.txt_desc.grid(row=2, column=1, sticky="w", **pad)
+        if current_desc:
+            self.txt_desc.insert("1.0", current_desc)
+
+        # Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=16)
+        ttk.Button(btn_frame, text="Kaydet", command=self.save).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="İptal", command=self.cancel).pack(side="left", padx=4)
+
+        # Make modal
+        self.transient(parent)
+        self.grab_set()
+
+    def save(self):
+        """Validate and save changes."""
+        try:
+            new_date = datetime.strptime(self.var_date.get().strip(), "%Y-%m-%d").date()
+        except ValueError:
+            messagebox.showwarning("Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır.", parent=self)
+            return
+
+        try:
+            new_total = decimal.Decimal(self.var_total.get().strip())
+            if new_total <= 0:
+                raise ValueError
+        except (decimal.InvalidOperation, ValueError):
+            messagebox.showwarning("Hatalı Tutar", "Geçerli bir tutar giriniz.", parent=self)
+            return
+
+        new_desc = self.txt_desc.get("1.0", tk.END).strip()
+
+        self.result = {
+            "date": new_date,
+            "total": new_total,
+            "description": new_desc
+        }
+        self.destroy()
+
+    def cancel(self):
+        """Close without saving."""
+        self.result = None
+        self.destroy()
+
 
 class CustomerDetailFrame(ttk.Frame):
     """Shows header info + sales list for a customer.
@@ -53,14 +136,14 @@ class CustomerDetailFrame(ttk.Frame):
         pad = {"padx": 8, "pady": 4}
         row = 0
 
-        # — Müşteri No entry —
+        # – Müşteri No entry –
         ttk.Label(self, text="Müşteri No:").grid(row=row, column=0, sticky="e", **pad)
         ent_id = ttk.Entry(self, textvariable=self.var_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
         ent_id.bind("<FocusOut>", self.load_customer)
         row += 1
 
-        # — Header info —
+        # – Header info –
         ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=0, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_name).grid(row=row, column=1, sticky="w", **pad)
         row += 1
@@ -81,7 +164,7 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Sales table (upper half, taller) —
+        # – Sales table (upper half, taller) –
         cols = ("sale_id", "tarih", "tutar", "aciklama")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=10)
         headings = ("No", "Tarih", "Toplam Tutar", "Açıklama")
@@ -92,15 +175,42 @@ class CustomerDetailFrame(ttk.Frame):
         self.tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.columnconfigure(3, weight=1)
         self.rowconfigure(row, weight=1)
+
+        # Bind selection and double-click
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.update_sale_buttons())
+        self.tree.bind("<Double-1>", lambda e: self.edit_sale())
+
         row += 1
 
-        # — Separator to report —
+        # – Sales action buttons –
+        sale_btn_frame = ttk.Frame(self)
+        sale_btn_frame.grid(row=row, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+
+        self.btn_edit_sale = ttk.Button(
+            sale_btn_frame,
+            text="Düzelt",
+            command=self.edit_sale,
+            state="disabled"
+        )
+        self.btn_edit_sale.pack(side="left", padx=4)
+
+        self.btn_delete_sale = ttk.Button(
+            sale_btn_frame,
+            text="Sil",
+            command=self.delete_sale,
+            state="disabled"
+        )
+        self.btn_delete_sale.pack(side="left", padx=4)
+
+        row += 1
+
+        # – Separator to report –
         ttk.Separator(self, orient="horizontal").grid(
             row=row, column=0, columnspan=4, sticky="ew", **pad
         )
         row += 1
 
-        # — Report controls —
+        # – Report controls –
         ttk.Label(self, text="Yıl:").grid(row=row, column=0, sticky="e", **pad)
         self.cmb_year = ttk.Combobox(
             self, textvariable=self.report_year_var, state="readonly", width=6
@@ -114,7 +224,7 @@ class CustomerDetailFrame(ttk.Frame):
         )
         row += 1
 
-        # — Installment report table (lower half, taller) —
+        # – Installment report table (lower half, taller) –
         rep_cols = ("month", "amount", "paid")
         self.report_tree = ttk.Treeview(self, columns=rep_cols, show="headings", height=10)
         rep_headings = ("Ay", "Tutar", "Ödendi")
@@ -124,15 +234,19 @@ class CustomerDetailFrame(ttk.Frame):
             self.report_tree.column(col, width=w, anchor="center")
         self.report_tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.rowconfigure(row, weight=1)
+
+        # Bind selection for undo payment button
+        self.report_tree.bind("<<TreeviewSelect>>", lambda e: self.update_undo_button())
+
         row += 1
 
-        # — Separator to Ödeme section —
+        # – Separator to Ödeme section –
         ttk.Separator(self, orient="horizontal").grid(
             row=row, column=0, columnspan=4, sticky="ew", **pad
         )
         row += 1
 
-        # — Ödeme section all on one line, tighter spacing —
+        # – Ödeme section all on one line, tighter spacing –
         pay_frame = ttk.Frame(self)
         pay_frame.grid(row=row, column=0, columnspan=4, sticky="w", pady=(2,4))
 
@@ -157,6 +271,11 @@ class CustomerDetailFrame(ttk.Frame):
             pay_frame, text="Ödemeyi Kaydet", command=self.save_payment
         )
         self.btn_save_payment.grid(row=0, column=4, padx=4, pady=2)
+
+        self.btn_undo_payment = ttk.Button(
+            pay_frame, text="Ödemeyi Geri Al", command=self.undo_payment, state="disabled"
+        )
+        self.btn_undo_payment.grid(row=0, column=5, padx=4, pady=2)
 
         # Initial population
         self.load_customer()
@@ -225,9 +344,83 @@ class CustomerDetailFrame(ttk.Frame):
                 ),
             )
 
+        # Update button states
+        self.update_sale_buttons()
+
         # Refresh report & payment section
         self.populate_years(cust_id)
         self.load_report()
+
+
+    def update_sale_buttons(self) -> None:
+        """Enable/disable sale edit/delete buttons based on selection."""
+        has_selection = bool(self.tree.selection())
+        state = "normal" if has_selection else "disabled"
+        self.btn_edit_sale.config(state=state)
+        self.btn_delete_sale.config(state=state)
+
+
+    def edit_sale(self) -> None:
+        """Open dialog to edit the selected sale."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        item = self.tree.item(selection[0])
+        sale_id = item["values"][0]
+
+        # Fetch current sale data
+        with db.session() as s:
+            sale = s.get(db.Sale, sale_id)
+            if not sale:
+                messagebox.showerror("Hata", "Satış bulunamadı.")
+                return
+
+            current_date = sale.date
+            current_total = sale.total
+            current_desc = sale.description or ""
+
+        # Open edit dialog
+        dialog = SaleEditDialog(self, sale_id, current_date, current_total, current_desc)
+        self.wait_window(dialog)
+
+        if dialog.result:
+            # Update sale in database
+            with db.session() as s:
+                sale = s.get(db.Sale, sale_id)
+                sale.date = dialog.result["date"]
+                sale.total = dialog.result["total"]
+                sale.description = dialog.result["description"]
+
+            messagebox.showinfo("Başarılı", "Satış güncellendi.")
+            self.load_customer()
+
+
+    def delete_sale(self) -> None:
+        """Delete the selected sale after confirmation."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        item = self.tree.item(selection[0])
+        sale_id = item["values"][0]
+
+        # Confirm deletion
+        response = messagebox.askyesno(
+            "Satışı Sil",
+            "Bu satışı ve tüm taksitlerini silmek istediğinizden emin misiniz?",
+            icon="warning"
+        )
+
+        if response:
+            with db.session() as s:
+                sale = s.get(db.Sale, sale_id)
+                if sale:
+                    s.delete(sale)
+
+            messagebox.showinfo("Başarılı", "Satış silindi.")
+            self.load_customer()
+
 
     def populate_years(self, cust_id: int) -> None:
         """Fill year list based on installments, default to current year."""
@@ -307,6 +500,9 @@ class CustomerDetailFrame(ttk.Frame):
         # keep grouped for update_payment_amount
         self.current_grouped = grouped
 
+        # Update undo button state
+        self.update_undo_button()
+
 
     def update_payment_amount(self) -> None:
         """Update the Tutar field when the Ödeme Ayı changes."""
@@ -316,6 +512,22 @@ class CustomerDetailFrame(ttk.Frame):
         m = TURKISH_MONTHS.index(month_name)
         amt = self.current_grouped.get(m, {}).get("total", decimal.Decimal("0.00"))
         self.payment_amount_var.set(format_currency(amt))
+
+
+    def update_undo_button(self) -> None:
+        """Enable 'Ödemeyi Geri Al' button only if a paid month is selected."""
+        selection = self.report_tree.selection()
+        if not selection:
+            self.btn_undo_payment.config(state="disabled")
+            return
+
+        item = self.report_tree.item(selection[0])
+        paid_status = item["values"][2]  # "Evet" or "Hayır"
+
+        if paid_status == "Evet":
+            self.btn_undo_payment.config(state="normal")
+        else:
+            self.btn_undo_payment.config(state="disabled")
 
 
     def save_payment(self) -> None:
@@ -340,4 +552,45 @@ class CustomerDetailFrame(ttk.Frame):
                 inst.paid = 1
 
         messagebox.showinfo("Ödeme Kaydedildi", f"{month_name} taksitleri ödendi.")
+        self.load_report()
+
+
+    def undo_payment(self) -> None:
+        """Mark all installments for the selected month as unpaid."""
+        selection = self.report_tree.selection()
+        if not selection:
+            return
+
+        item = self.report_tree.item(selection[0])
+        month_name = item["values"][0]
+
+        # Confirm undo
+        response = messagebox.askyesno(
+            "Ödemeyi Geri Al",
+            f"{month_name} ayı için yapılan ödemeyi geri almak istediğinizden emin misiniz?",
+            icon="warning"
+        )
+
+        if not response:
+            return
+
+        m = TURKISH_MONTHS.index(month_name)
+        cust_id = int(self.var_id.get())
+        year = int(self.report_year_var.get())
+
+        with db.session() as s:
+            insts = (
+                s.query(db.Installment)
+                 .join(db.Sale)
+                 .filter(
+                     db.Sale.customer_id == cust_id,
+                     func.strftime("%Y", db.Installment.due_date) == str(year),
+                     func.strftime("%m", db.Installment.due_date) == f"{m:02d}"
+                 )
+                 .all()
+            )
+            for inst in insts:
+                inst.paid = 0
+
+        messagebox.showinfo("Geri Alındı", f"{month_name} ödemesi geri alındı.")
         self.load_report()
