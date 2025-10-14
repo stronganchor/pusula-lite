@@ -1,5 +1,5 @@
 # updater.py
-# Automatic update checker and installer with Turkish UI
+# Automatic update checker and installer with Turkish UI.
 
 import subprocess
 import sys
