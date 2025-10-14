@@ -19,7 +19,7 @@ def format_currency(amount: Decimal) -> str:
     return f"{integer},{dec}"
 
 
-def generate_receipt_html(sale_id: int, company_name: str = "ENES TİCARET") -> str:
+def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
     """Generate HTML for a sales receipt."""
 
     with db.session() as s:
@@ -50,73 +50,185 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES TİCARET") -> 
     <title>Satış Makbuzu - {customer.name}</title>
     <style>
         @media print {{
-            @page {{ margin: 1cm; }}
+            @page {{
+                margin: 0;
+                size: A4;
+            }}
             body {{ margin: 0; }}
         }}
         body {{
-            font-family: 'Courier New', monospace;
-            font-size: 12pt;
-            line-height: 1.4;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
             max-width: 21cm;
             margin: 0 auto;
-            padding: 1cm;
+            padding: 2cm 1.5cm;
         }}
-        .center {{ text-align: center; }}
-        .header {{ margin-bottom: 20px; }}
-        .title {{
-            font-weight: bold;
-            margin: 20px 0;
+        .header {{
             text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 15px;
         }}
-        .separator {{
-            border-top: 1px dashed #000;
+        .company-name {{
+            font-size: 20pt;
+            font-weight: bold;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }}
+        .company-info {{
+            font-size: 10pt;
+            color: #444;
+            line-height: 1.4;
+        }}
+        .title {{
+            font-size: 14pt;
+            font-weight: bold;
+            margin: 25px 0 20px 0;
+            text-align: center;
+            color: #1a1a1a;
+            text-transform: uppercase;
+        }}
+        .info-section {{
+            margin: 20px 0;
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 5px;
+        }}
+        .info-row {{
+            margin: 8px 0;
+            display: flex;
+        }}
+        .info-label {{
+            font-weight: 600;
+            color: #333;
+            min-width: 100px;
+        }}
+        .info-value {{
+            color: #555;
+        }}
+        .sale-details {{
+            margin: 25px 0;
+            padding: 15px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }}
+        .sale-row {{
             margin: 10px 0;
+            font-size: 11pt;
+        }}
+        .amount {{
+            font-weight: 600;
+            color: #2c5282;
+        }}
+        .installment-section {{
+            margin: 25px 0;
+        }}
+        .installment-header {{
+            font-weight: 600;
+            font-size: 11pt;
+            margin-bottom: 10px;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }}
+        .installment-columns {{
+            display: flex;
+            gap: 20px;
+        }}
+        .installment-col {{
+            flex: 1;
+        }}
+        .installment-item {{
+            padding: 6px 10px;
+            margin: 4px 0;
+            background: #f5f5f5;
+            border-radius: 3px;
+            font-size: 10pt;
+        }}
+        .totals-section {{
+            margin: 20px 0;
+            padding: 15px;
+            background: #f0f4f8;
+            border-radius: 5px;
+        }}
+        .total-row {{
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            font-size: 11pt;
+        }}
+        .grand-total {{
+            font-weight: bold;
+            font-size: 12pt;
+            color: #1a1a1a;
+            border-top: 2px solid #333;
+            padding-top: 10px;
+            margin-top: 10px;
         }}
         .footer {{
-            margin-top: 30px;
+            margin-top: 40px;
             text-align: center;
+            border-top: 2px solid #333;
+            padding-top: 20px;
         }}
-        .row {{ margin: 5px 0; }}
-        .installment-section {{
-            margin: 20px 0;
+        .thank-you {{
+            font-size: 11pt;
+            color: #333;
+            margin-bottom: 10px;
         }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0;
+        .company-footer {{
+            font-weight: bold;
+            font-size: 12pt;
+            color: #1a1a1a;
         }}
-        td {{
-            padding: 5px;
-        }}
-        .right {{ text-align: right; }}
     </style>
 </head>
 <body>
-    <div class="header center">
-        <div><strong>{company_name}</strong></div>
-        <div>KOZAN CD. PTT EVLERİ</div>
-        <div>KAVŞAĞı NO: 689                      ADANA</div>
-        <div>Telefon: 3299231 - 3299232</div>
+    <div class="header">
+        <div class="company-name">{company_name}</div>
+        <div class="company-info">
+            KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA<br>
+            Telefon: (0322) 329 92 32<br>
+            Web: https://enesbeko.com
+        </div>
     </div>
-
-    <div class="row">Tarih : {tarih}</div>
-    <div class="row">Saat  : {saat}</div>
 
     <div class="title">
         {"Satış Makbuzu" if is_pesin else "Taksitli Alışveriş - Satış Makbuzu"}
     </div>
 
-    <div class="row">Hesap No: {customer.id}</div>
-    <div class="row">Sayın: {customer.name}</div>
-    <div class="row">Adres: {customer.address or ""}</div>
-"""
+    <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+        <div><strong>Tarih:</strong> {tarih}</div>
+        <div><strong>Saat:</strong> {saat}</div>
+    </div>
 
-        # Sale details
-        html += f"""
-    <div class="separator"></div>
+    <div class="info-section">
+        <div class="info-row">
+            <span class="info-label">Hesap No:</span>
+            <span class="info-value">{customer.id}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Sayın:</span>
+            <span class="info-value">{customer.name}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Adres:</span>
+            <span class="info-value">{customer.address or ""}</span>
+        </div>
+    </div>
 
-    <div class="row">{sale.date.strftime("%d/%m/%Y")} Tarihinde {format_currency(sale.total):>15} TL. Alışveriş Yapılıp</div>
-    <div class="row">{format_currency(down_payment):>47} TL {"Peşinat Alınmıştır" if not is_pesin else "Ödenmiştir"}</div>
+    <div class="sale-details">
+        <div class="sale-row">
+            <strong>{sale.date.strftime("%d/%m/%Y")}</strong> Tarihinde
+            <span class="amount">{format_currency(sale.total)} TL</span> Alışveriş Yapılıp
+        </div>
+        <div class="sale-row">
+            <span class="amount">{format_currency(down_payment)} TL</span>
+            {"Ödenmiştir" if is_pesin else "Peşinat Alınmıştır"}
+        </div>
+    </div>
 """
 
         # If installment sale, show installment details
@@ -129,48 +241,53 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES TİCARET") -> 
             geciken_total = sum(inst.amount for inst in geciken)
             taksitler_total = sum(inst.amount for inst in taksitler)
 
-            html += f"""
-    <div class="separator"></div>
-
+            html += """
     <div class="installment-section">
-        <table>
-            <tr>
-                <td style="width: 50%;">
-                    <strong>Geciken</strong><br>
+        <div class="installment-columns">
+            <div class="installment-col">
+                <div class="installment-header">Geciken Taksitler</div>
 """
-            for inst in geciken:
-                html += f"                    {inst.due_date.strftime('%d/%m/%Y')} - {format_currency(inst.amount)} TL<br>\n"
+            if geciken:
+                for inst in geciken:
+                    html += f'                <div class="installment-item">{inst.due_date.strftime("%d/%m/%Y")} - {format_currency(inst.amount)} TL</div>\n'
+            else:
+                html += '                <div class="installment-item">Yok</div>\n'
 
-            html += f"""                </td>
-                <td style="width: 50%;">
-                    <strong>Taksitler</strong><br>
+            html += """            </div>
+            <div class="installment-col">
+                <div class="installment-header">Yaklaşan Taksitler</div>
 """
-            for inst in taksitler:
-                html += f"                    {inst.due_date.strftime('%d/%m/%Y')} - {format_currency(inst.amount)} TL<br>\n"
+            if taksitler:
+                for inst in taksitler:
+                    html += f'                <div class="installment-item">{inst.due_date.strftime("%d/%m/%Y")} - {format_currency(inst.amount)} TL</div>\n'
+            else:
+                html += '                <div class="installment-item">Yok</div>\n'
 
-            html += f"""                </td>
-            </tr>
-        </table>
-        <div class="separator"></div>
-        <table>
-            <tr>
-                <td style="width: 50%;">Toplam : {format_currency(geciken_total)} TL</td>
-                <td style="width: 50%;">Toplam : {format_currency(taksitler_total)} TL</td>
-            </tr>
-        </table>
-        <div class="separator"></div>
-        <div class="row">Genel Toplam : {format_currency(geciken_total + taksitler_total)} TL</div>
+            html += f"""            </div>
+        </div>
+    </div>
+
+    <div class="totals-section">
+        <div class="total-row">
+            <span>Geciken Toplam:</span>
+            <span class="amount">{format_currency(geciken_total)} TL</span>
+        </div>
+        <div class="total-row">
+            <span>Taksitler Toplam:</span>
+            <span class="amount">{format_currency(taksitler_total)} TL</span>
+        </div>
+        <div class="total-row grand-total">
+            <span>Genel Toplam:</span>
+            <span class="amount">{format_currency(geciken_total + taksitler_total)} TL</span>
+        </div>
     </div>
 """
 
         # Footer
         html += """
-    <div class="separator"></div>
-
     <div class="footer">
-        <p>MAĞAZAMIZDAN YAPMIŞ OLDUĞUNUZ ALIŞ VERİŞTEN DOLAYI TEŞEKKÜR EDERİZ</p>
-        <p><strong>ENES EFY KARDEŞLER</strong></p>
-        <p style="font-size: 10pt; margin-top: 20px;">Pusula Yazılım (322-4570411-4582410 Adana)</p>
+        <div class="thank-you">MAĞAZAMIZDAN YAPMIŞ OLDUĞUNUZ ALIŞ VERİŞTEN DOLAYI TEŞEKKÜR EDERİZ</div>
+        <div class="company-footer">ENES BEKO</div>
     </div>
 
     <script>
@@ -185,7 +302,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES TİCARET") -> 
     return html
 
 
-def print_receipt(sale_id: int, company_name: str = "ENES TİCARET") -> bool:
+def print_receipt(sale_id: int, company_name: str = "ENES BEKO") -> bool:
     """Generate receipt HTML and open in browser for printing."""
     try:
         html = generate_receipt_html(sale_id, company_name)
