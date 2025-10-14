@@ -98,10 +98,18 @@ def check_for_updates():
     repo_dir = Path(__file__).parent
 
     try:
+        # Fetch all branches from remote
+        success, stdout, stderr = run_command(
+            ["git", "fetch", "origin"],
+            cwd=repo_dir
+        )
+
+        if not success:
+            return False, f"Git fetch başarısız: {stderr[:50]}"
+
         # Get current branch
         branch = get_current_branch()
         if not branch:
-            # Fallback: try to get branch from git status
             success, stdout, stderr = run_command(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=repo_dir
@@ -109,16 +117,45 @@ def check_for_updates():
             if success and stdout.strip():
                 branch = stdout.strip()
             else:
-                branch = "main"  # default fallback
+                branch = None
 
-        # Fetch latest from remote
+        # If we don't have a branch or the remote doesn't have it, try main then master
+        if not branch:
+            # Try to find the default remote branch
+            success, stdout, stderr = run_command(
+                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                cwd=repo_dir
+            )
+            if success and stdout.strip():
+                branch = stdout.strip().replace("refs/remotes/origin/", "")
+            else:
+                # Try main first, then master
+                success, stdout, stderr = run_command(
+                    ["git", "rev-parse", "origin/main"],
+                    cwd=repo_dir
+                )
+                if success:
+                    branch = "main"
+                else:
+                    branch = "master"
+
+        # Check if remote branch exists
         success, stdout, stderr = run_command(
-            ["git", "fetch", "origin", branch],
+            ["git", "rev-parse", f"origin/{branch}"],
             cwd=repo_dir
         )
 
         if not success:
-            return False, f"Git fetch başarısız: {stderr[:50]}"
+            # Try the other common branch name
+            alt_branch = "main" if branch == "master" else "master"
+            success, stdout, stderr = run_command(
+                ["git", "rev-parse", f"origin/{alt_branch}"],
+                cwd=repo_dir
+            )
+            if success:
+                branch = alt_branch
+            else:
+                return False, f"Remote branch bulunamadı"
 
         # Check if local is behind remote
         success, stdout, stderr = run_command(
@@ -187,28 +224,20 @@ def perform_update(dialog):
 def check_and_update(parent_window):
     """Check for updates and prompt user to install."""
 
-    # DEBUG: Verify function is being called
-    print("DEBUG: check_and_update called")
-
     try:
         # Check if Git is available
         success, stdout, stderr = run_command(["git", "--version"])
-        print(f"DEBUG: Git check - success={success}, stdout={stdout[:50] if stdout else 'None'}")
 
         if not success:
             print("DEBUG: Git not available, skipping")
             return  # Silently skip if Git is not installed
 
         # Check for updates
-        print("DEBUG: Checking for updates...")
         has_updates, message = check_for_updates()
-        print(f"DEBUG: has_updates={has_updates}, message={message}")
 
         if not has_updates:
-            print("DEBUG: No updates found")
             return  # No updates, continue normally
 
-        print("DEBUG: Showing messagebox to user")
         # Ask user if they want to update
         response = messagebox.askyesno(
             "Güncelleme Mevcut",
@@ -217,10 +246,8 @@ def check_and_update(parent_window):
         )
 
         if not response:
-            print("DEBUG: User declined update")
             return  # User declined
 
-        print("DEBUG: User accepted, starting update")
         # Show progress dialog
         dialog = UpdateDialog(parent_window)
 
