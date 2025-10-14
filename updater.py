@@ -81,13 +81,38 @@ def run_command(cmd, cwd=None):
         return False, "", str(e)
 
 
+def get_current_branch():
+    """Get the current Git branch name."""
+    repo_dir = Path(__file__).parent
+    success, stdout, stderr = run_command(
+        ["git", "branch", "--show-current"],
+        cwd=repo_dir
+    )
+    if success and stdout.strip():
+        return stdout.strip()
+    return None
+
+
 def check_for_updates():
     """Check if updates are available from Git."""
     repo_dir = Path(__file__).parent
 
+    # Get current branch
+    branch = get_current_branch()
+    if not branch:
+        # Fallback: try to get branch from git status
+        success, stdout, stderr = run_command(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_dir
+        )
+        if success and stdout.strip():
+            branch = stdout.strip()
+        else:
+            branch = "main"  # default fallback
+
     # Fetch latest from remote
     success, stdout, stderr = run_command(
-        ["git", "fetch", "origin"],
+        ["git", "fetch", "origin", branch],
         cwd=repo_dir
     )
 
@@ -96,16 +121,7 @@ def check_for_updates():
 
     # Check if local is behind remote
     success, stdout, stderr = run_command(
-        ["git", "rev-list", "HEAD..origin/main", "--count"],
-        cwd=repo_dir
-    )
-
-    if success and stdout.strip() and int(stdout.strip()) > 0:
-        return True, f"{stdout.strip()} güncelleme mevcut"
-
-    # Try master branch if main doesn't exist
-    success, stdout, stderr = run_command(
-        ["git", "rev-list", "HEAD..origin/master", "--count"],
+        ["git", "rev-list", f"HEAD..origin/{branch}", "--count"],
         cwd=repo_dir
     )
 
@@ -119,16 +135,35 @@ def perform_update(dialog):
     """Perform the actual update."""
     repo_dir = Path(__file__).parent
 
-    # Step 1: Git pull
+    # Get current branch
+    branch = get_current_branch()
+    if not branch:
+        success, stdout, stderr = run_command(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=repo_dir
+        )
+        if success and stdout.strip():
+            branch = stdout.strip()
+        else:
+            branch = "main"
+
+    # Step 1: Git pull with explicit remote and branch
     dialog.update_status("Güncellemeler indiriliyor...", "Git pull çalışıyor")
     success, stdout, stderr = run_command(
-        ["git", "pull", "--ff-only"],
+        ["git", "pull", "origin", branch, "--ff-only"],
         cwd=repo_dir
     )
 
     if not success:
-        dialog.finish(False, f"Git pull başarısız: {stderr[:50]}")
-        return False
+        # If ff-only fails, try regular pull
+        success, stdout, stderr = run_command(
+            ["git", "pull", "origin", branch],
+            cwd=repo_dir
+        )
+
+        if not success:
+            dialog.finish(False, f"Git pull başarısız: {stderr[:100]}")
+            return False
 
     # Step 2: Update Python packages if requirements.txt exists
     req_file = repo_dir / "requirements.txt"
@@ -140,12 +175,11 @@ def perform_update(dialog):
         )
 
         if not success:
-            dialog.finish(False, f"Paket güncellemesi başarısız: {stderr[:50]}")
+            dialog.finish(False, f"Paket güncellemesi başarısız: {stderr[:100]}")
             return False
 
     dialog.finish(True, "Güncelleme tamamlandı! Uygulama yeniden başlatılacak.")
     return True
-
 
 def check_and_update(parent_window):
     """Check for updates and prompt user to install."""
