@@ -42,6 +42,8 @@ class PusulaLiteApp(tk.Tk):
         self.tab_search.add_frame    = self.tab_add
         self.tab_search.sale_frame   = self.tab_sale
         self.tab_add.sale_frame      = self.tab_sale
+        self.tab_add.search_frame    = self.tab_search  
+        self.tab_sale.search_frame   = self.tab_search 
 
         # Add tabs in order
         self.notebook.add(self.tab_search, text="Müşteri Arama")
