@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import updater
 
 import db
 import app_state
@@ -223,12 +224,14 @@ class SaleFrame(ttk.Frame):
                 ))
     
         # Ask if user wants to print receipt
-        response = messagebox.askyesno(
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
             "Başarılı",
             "Satış ve taksitler kaydedildi.\n\nSatış makbuzunu yazdırmak ister misiniz?"
         )
+        self.wait_window(dialog)
     
-        if response:
+        if dialog.result:
             receipt_printer.print_receipt(sale_id)
     
         app_state.last_customer_id = cust_id
