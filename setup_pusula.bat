@@ -1,9 +1,9 @@
 @echo off
-setlocal enabledelayedexpansion
 REM ---------------------------------------------------------------
 REM  Pusula Lite – first-time setup script  (Windows 10/11, 64-bit)
 REM ---------------------------------------------------------------
 
+setlocal
 REM >>> CHANGE THIS IF YOU WANT A DIFFERENT PYTHON VERSION <
 set PY_VER=3.12.3
 set PY_EXE=python-%PY_VER%-amd64.exe
@@ -37,44 +37,24 @@ if not exist "data" mkdir data
 
 echo.
 echo === Step 5: Locate pythonw.exe ===
-set PYTHONW_PATH=
+py -c "import sys; print(sys.executable.replace('python.exe', 'pythonw.exe'))" > temp_path.txt 2>nul
+set /p PYTHONW_PATH=<temp_path.txt
+del temp_path.txt
 
-REM Try py.exe launcher first (most reliable)
-for /f "delims=" %%i in ('py -c "import sys; print(sys.executable)" 2^>nul') do set PYTHON_PATH=%%i
-
-if defined PYTHON_PATH (
-    for %%i in ("!PYTHON_PATH!") do set PYTHON_DIR=%%~dpi
-    set PYTHONW_PATH=!PYTHON_DIR!pythonw.exe
-
-    if exist "!PYTHONW_PATH!" (
-        echo Found pythonw: !PYTHONW_PATH!
-    ) else (
-        echo pythonw.exe not found, using python.exe
-        set PYTHONW_PATH=!PYTHON_PATH!
-    )
-) else (
-    REM Fallback: search PATH, excluding WindowsApps
-    for /f "delims=" %%i in ('where python 2^>nul') do (
-        set TEST_PATH=%%i
-        echo !TEST_PATH! | findstr /i /v "WindowsApps" >nul
-        if !errorlevel! equ 0 (
-            set PYTHON_PATH=%%i
-            goto :found_python
-        )
-    )
-    :found_python
-
-    if defined PYTHON_PATH (
-        for %%i in ("!PYTHON_PATH!") do set PYTHON_DIR=%%~dpi
-        set PYTHONW_PATH=!PYTHON_DIR!pythonw.exe
-        if not exist "!PYTHONW_PATH!" set PYTHONW_PATH=!PYTHON_PATH!
-        echo Found: !PYTHONW_PATH!
-    ) else (
-        echo ERROR: Cannot find Python installation
-        pause
-        exit /b 1
-    )
+if not defined PYTHONW_PATH (
+    echo ERROR: Cannot find Python installation
+    pause
+    exit /b 1
 )
+
+if not exist "%PYTHONW_PATH%" (
+    echo WARNING: pythonw.exe not found, using python.exe instead
+    py -c "import sys; print(sys.executable)" > temp_path.txt 2>nul
+    set /p PYTHONW_PATH=<temp_path.txt
+    del temp_path.txt
+)
+
+echo Found: %PYTHONW_PATH%
 
 echo.
 echo === Step 6: Create desktop shortcut ===
