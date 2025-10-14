@@ -218,7 +218,7 @@ class CustomerDetailFrame(ttk.Frame):
         self.cmb_year.grid(row=row, column=1, sticky="w", **pad)
         self.cmb_year.bind("<<ComboboxSelected>>", lambda e: self.load_report())
 
-        ttk.Label(self, text="Toplam Borç:").grid(row=row, column=2, sticky="e", **pad)
+        ttk.Label(self, text="Kalan Toplam Borç:").grid(row=row, column=2, sticky="e", **pad)
         ttk.Label(self, textvariable=self.var_total_debt).grid(
             row=row, column=3, sticky="w", **pad
         )
@@ -460,10 +460,10 @@ class CustomerDetailFrame(ttk.Frame):
 
 
     def load_report(self) -> None:
-        """Load combined monthly report, update toplam borç, and set ödeme defaults."""
+        """Load combined monthly report, update kalan toplam borç, and set ödeme defaults."""
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
-
+    
         with db.session() as s:
             rows = (
                 s.query(db.Installment.due_date, db.Installment.amount, db.Installment.paid)
@@ -475,7 +475,7 @@ class CustomerDetailFrame(ttk.Frame):
                  .order_by(db.Installment.due_date)
                  .all()
             )
-
+    
         # Group by month
         grouped: dict[int, dict[str, decimal.Decimal | bool]] = {}
         for due_date, amount, paid in rows:
@@ -485,11 +485,18 @@ class CustomerDetailFrame(ttk.Frame):
             grouped[m]["total"] += amount
             if not paid:
                 grouped[m]["all_paid"] = False
-
-        # Update toplam borç: sum of unpaid months
-        total_debt = sum(v["total"] for v in grouped.values() if not v["all_paid"])
+    
+        # Update kalan toplam borç: sum ALL unpaid installments across ALL years
+        with db.session() as s:
+            total_debt = s.query(func.sum(db.Installment.amount)) \
+                .join(db.Sale) \
+                .filter(
+                    db.Sale.customer_id == cust_id,
+                    db.Installment.paid == 0
+                ).scalar() or decimal.Decimal("0.00")
+    
         self.var_total_debt.set(format_currency(total_debt))
-
+    
         # Populate report tree
         self.report_tree.delete(*self.report_tree.get_children())
         for m in sorted(grouped):
@@ -499,14 +506,14 @@ class CustomerDetailFrame(ttk.Frame):
                 "", "end",
                 values=(TURKISH_MONTHS[m], format_currency(total), paid_str)
             )
-
+    
         # Determine earliest unpaid month (if any)
         unpaid = [m for m, v in grouped.items() if not v["all_paid"]]
         if unpaid:
             m0 = min(unpaid)
             self.payment_month_var.set(TURKISH_MONTHS[m0])
             self.cmb_pay_month.config(state="readonly")
-            self.entry_pay_amount.config(state="normal")
+            self.entry_pay_amount.config(state="readonly")  # Changed from "normal" to "readonly"
             self.payment_amount_var.set(format_currency(grouped[m0]["total"]))
             self.btn_save_payment.config(state="normal")
         else:
@@ -516,12 +523,9 @@ class CustomerDetailFrame(ttk.Frame):
             self.cmb_pay_month.config(state="disabled")
             self.entry_pay_amount.config(state="disabled")
             self.btn_save_payment.config(state="disabled")
-
+    
         # keep grouped for update_payment_amount
         self.current_grouped = grouped
-
-        # Update undo button state
-        self.update_undo_button()
 
 
     def update_payment_amount(self) -> None:
