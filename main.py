@@ -20,6 +20,7 @@ class PusulaLiteApp(tk.Tk):
         super().__init__()
         self.title("Pusula Lite")
         self.geometry("800x600")
+        self.state('zoomed')
         self.minsize(640, 480)
 
         # Ensure database and tables exist
