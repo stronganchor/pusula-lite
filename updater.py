@@ -175,7 +175,7 @@ def perform_update(dialog):
     """Perform the actual update."""
     repo_dir = Path(__file__).parent
 
-    # Get current branch
+    # Determine the correct branch
     branch = get_current_branch()
     if not branch:
         success, stdout, stderr = run_command(
@@ -185,7 +185,25 @@ def perform_update(dialog):
         if success and stdout.strip():
             branch = stdout.strip()
         else:
-            branch = "main"
+            # Try to detect remote default
+            success, stdout, stderr = run_command(
+                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                cwd=repo_dir
+            )
+            if success and stdout.strip():
+                branch = stdout.strip().replace("refs/remotes/origin/", "")
+            else:
+                # Check which one exists
+                success, _, _ = run_command(["git", "rev-parse", "origin/main"], cwd=repo_dir)
+                branch = "main" if success else "master"
+
+    # Verify remote branch exists
+    success, _, _ = run_command(["git", "rev-parse", f"origin/{branch}"], cwd=repo_dir)
+    if not success:
+        alt_branch = "main" if branch == "master" else "master"
+        success, _, _ = run_command(["git", "rev-parse", f"origin/{alt_branch}"], cwd=repo_dir)
+        if success:
+            branch = alt_branch
 
     # Step 1: Git pull with explicit remote and branch
     dialog.update_status("Güncellemeler indiriliyor...", "Git pull çalışıyor")
