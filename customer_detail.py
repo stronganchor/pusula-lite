@@ -380,21 +380,41 @@ class CustomerDetailFrame(ttk.Frame):
             current_total = sale.total
             current_desc = sale.description or ""
 
+            # Get installment info for recalculation
+            installments = list(sale.installments)
+            n_installments = len(installments)
+            old_inst_sum = sum(inst.amount for inst in installments)
+
         # Open edit dialog
         dialog = SaleEditDialog(self, sale_id, current_date, current_total, current_desc)
         self.wait_window(dialog)
 
         if dialog.result:
-            # Update sale in database
+            new_total = dialog.result["total"]
+
+            # Calculate down payment (original total - sum of installments)
+            down_payment = current_total - old_inst_sum
+
+            # Calculate new installment amount
+            if n_installments > 0:
+                remaining = new_total - down_payment
+                new_inst_amount = (remaining / n_installments).quantize(decimal.Decimal("0.01"))
+            else:
+                new_inst_amount = decimal.Decimal("0.00")
+
+            # Update sale and installments in database
             with db.session() as s:
                 sale = s.get(db.Sale, sale_id)
                 sale.date = dialog.result["date"]
-                sale.total = dialog.result["total"]
+                sale.total = new_total
                 sale.description = dialog.result["description"]
 
-            messagebox.showinfo("Başarılı", "Satış güncellendi.")
-            self.load_customer()
+                # Update all installment amounts
+                for inst in sale.installments:
+                    inst.amount = new_inst_amount
 
+            messagebox.showinfo("Başarılı", "Satış ve taksitler güncellendi.")
+            self.load_customer()
 
     def delete_sale(self) -> None:
         """Delete the selected sale after confirmation."""
