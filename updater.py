@@ -208,10 +208,10 @@ def check_and_update(parent_window):
     # Show progress dialog
     dialog = UpdateDialog(parent_window)
 
-    def update_thread():
-        success = perform_update(dialog)
-        if success:
-            parent_window.after(2500, lambda: restart_application(parent_window))
+def update_thread():
+    success = perform_update(dialog)
+    if success:
+        parent_window.after(2500, lambda: restart_application(parent_window))
 
     threading.Thread(target=update_thread, daemon=True).start()
 
