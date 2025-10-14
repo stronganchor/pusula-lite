@@ -97,39 +97,42 @@ def check_for_updates():
     """Check if updates are available from Git."""
     repo_dir = Path(__file__).parent
 
-    # Get current branch
-    branch = get_current_branch()
-    if not branch:
-        # Fallback: try to get branch from git status
+    try:
+        # Get current branch
+        branch = get_current_branch()
+        if not branch:
+            # Fallback: try to get branch from git status
+            success, stdout, stderr = run_command(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_dir
+            )
+            if success and stdout.strip():
+                branch = stdout.strip()
+            else:
+                branch = "main"  # default fallback
+
+        # Fetch latest from remote
         success, stdout, stderr = run_command(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            ["git", "fetch", "origin", branch],
             cwd=repo_dir
         )
-        if success and stdout.strip():
-            branch = stdout.strip()
-        else:
-            branch = "main"  # default fallback
 
-    # Fetch latest from remote
-    success, stdout, stderr = run_command(
-        ["git", "fetch", "origin", branch],
-        cwd=repo_dir
-    )
+        if not success:
+            return False, f"Git fetch başarısız: {stderr[:50]}"
 
-    if not success:
-        return False, "Git fetch başarısız"
+        # Check if local is behind remote
+        success, stdout, stderr = run_command(
+            ["git", "rev-list", f"HEAD..origin/{branch}", "--count"],
+            cwd=repo_dir
+        )
 
-    # Check if local is behind remote
-    success, stdout, stderr = run_command(
-        ["git", "rev-list", f"HEAD..origin/{branch}", "--count"],
-        cwd=repo_dir
-    )
+        if success and stdout.strip() and int(stdout.strip()) > 0:
+            return True, f"{stdout.strip()} güncelleme mevcut"
 
-    if success and stdout.strip() and int(stdout.strip()) > 0:
-        return True, f"{stdout.strip()} güncelleme mevcut"
+        return False, "Güncelleme yok"
 
-    return False, "Güncelleme yok"
-
+    except Exception as e:
+        return False, f"Hata: {str(e)}"
 
 def perform_update(dialog):
     """Perform the actual update."""
