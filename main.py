@@ -4,6 +4,7 @@
 import tkinter as tk
 from tkinter import ttk
 
+import updater
 import db
 import app_state
 from customer_form import AddCustomerFrame
@@ -59,6 +60,9 @@ class PusulaLiteApp(tk.Tk):
 
         # Whenever user switches tabs, refresh search/detail
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+        # Check for updates on startup
+        self.after(500, lambda: updater.check_and_update(self))
 
     def on_tab_changed(self, event) -> None:
         """Refresh the search list or detail view when its tab is selected."""
