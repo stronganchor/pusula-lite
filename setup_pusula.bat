@@ -4,7 +4,6 @@ REM  Pusula Lite — first-time setup script  (Windows 10/11, 64-bit)
 REM ---------------------------------------------------------------
 
 setlocal
-REM >>> CHANGE THESE IF NEEDED <
 set PY_VER=3.12.3
 set PY_EXE=python-%PY_VER%-amd64.exe
 set PY_URL=https://www.python.org/ftp/python/%PY_VER%/%PY_EXE%
@@ -53,8 +52,8 @@ if not exist ".git" (
     git init
     git remote add origin %REPO_URL%
     echo Fetching latest code from GitHub...
-    git fetch
-    git reset --hard origin/main
+    git fetch origin
+    git checkout -b main origin/main
     echo Repository initialized and synced.
 ) else (
     echo Git repository already initialized.
@@ -74,12 +73,13 @@ if not exist "data" mkdir data
 
 echo.
 echo === Step 7: Create desktop shortcut ===
+set "DESKTOP=%PUBLIC%\Desktop"
 powershell -nop -c ^
  "$s=New-Object -ComObject WScript.Shell;" ^
- "$sc=$s.CreateShortcut('$env:Public\Desktop\Pusula Lite.lnk');" ^
+ "$sc=$s.CreateShortcut('%DESKTOP%\Pusula Lite.lnk');" ^
  "$sc.TargetPath='%cd%\main.py';" ^
  "$sc.Arguments='';" ^
- "$sc.IconLocation='%%SystemRoot%%\py.exe,0';" ^
+ "$sc.IconLocation='C:\Windows\py.exe,0';" ^
  "$sc.Save();"
 
 echo.
