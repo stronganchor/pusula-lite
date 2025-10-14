@@ -5,6 +5,9 @@
 import tkinter as tk
 from tkinter import ttk
 
+# TESTING -remove this later
+from ui import SplitterUI
+
 import updater
 import db
 import app_state
