@@ -184,29 +184,48 @@ def perform_update(dialog):
 def check_and_update(parent_window):
     """Check for updates and prompt user to install."""
 
-    # Check if Git is available
-    success, _, _ = run_command(["git", "--version"])
-    if not success:
-        return  # Silently skip if Git is not installed
+    try:
+        # Check if Git is available
+        success, _, _ = run_command(["git", "--version"])
+        if not success:
+            return  # Silently skip if Git is not installed
 
-    # Check for updates
-    has_updates, message = check_for_updates()
+        # Check for updates
+        has_updates, message = check_for_updates()
 
-    if not has_updates:
-        return  # No updates, continue normally
+        if not has_updates:
+            return  # No updates, continue normally
 
-    # Ask user if they want to update
-    response = messagebox.askyesno(
-        "Güncelleme Mevcut",
-        f"{message}\n\nŞimdi güncellemek ister misiniz?",
-        parent=parent_window
-    )
+        # Ask user if they want to update
+        response = messagebox.askyesno(
+            "Güncelleme Mevcut",
+            f"{message}\n\nŞimdi güncellemek ister misiniz?",
+            parent=parent_window
+        )
 
-    if not response:
-        return  # User declined
+        if not response:
+            return  # User declined
 
-    # Show progress dialog
-    dialog = UpdateDialog(parent_window)
+        # Show progress dialog
+        dialog = UpdateDialog(parent_window)
+
+        def update_thread():
+            success = perform_update(dialog)
+            if success:
+                parent_window.after(2500, lambda: restart_application(parent_window))
+
+        threading.Thread(target=update_thread, daemon=True).start()
+
+        # Wait for dialog to close
+        parent_window.wait_window(dialog)
+
+    except Exception as e:
+        # Show any errors that occur
+        messagebox.showerror(
+            "Güncelleme Hatası",
+            f"Güncelleme kontrolü sırasında hata oluştu:\n\n{str(e)}",
+            parent=parent_window
+        )
 
 def update_thread():
     success = perform_update(dialog)
