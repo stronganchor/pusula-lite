@@ -1,12 +1,13 @@
 @echo off
 REM -------------------------------------------------------------
-REM  update_pusula.bat  –  Pull latest code, refresh dependencies
+REM  update_pusula.bat  —  Pull latest code, refresh dependencies
 REM -------------------------------------------------------------
 
 cd /d "%~dp0"          REM go to script directory
 
 echo === Fetching latest code from GitHub ===
-git pull --ff-only
+git fetch origin
+git reset --hard origin/main
 
 if exist requirements.txt (
     echo.
