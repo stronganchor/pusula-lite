@@ -58,130 +58,134 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
         }}
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            font-size: 11pt;
-            line-height: 1.6;
+            font-size: 10pt;
+            line-height: 1.4;
             max-width: 21cm;
             margin: 0 auto;
-            padding: 2cm 1.5cm;
+            padding: 1.5cm 1.5cm;
         }}
         .header {{
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             border-bottom: 2px solid #333;
-            padding-bottom: 15px;
+            padding-bottom: 12px;
         }}
         .company-name {{
-            font-size: 20pt;
+            font-size: 18pt;
             font-weight: bold;
             color: #1a1a1a;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }}
         .company-info {{
-            font-size: 10pt;
+            font-size: 9pt;
             color: #444;
-            line-height: 1.4;
+            line-height: 1.3;
         }}
         .title {{
-            font-size: 14pt;
+            font-size: 13pt;
             font-weight: bold;
-            margin: 25px 0 20px 0;
+            margin: 18px 0 15px 0;
             text-align: center;
             color: #1a1a1a;
-            text-transform: uppercase;
         }}
         .info-section {{
-            margin: 20px 0;
+            margin: 15px 0;
             background: #f9f9f9;
-            padding: 15px;
-            border-radius: 5px;
+            padding: 12px;
+            border-radius: 4px;
         }}
         .info-row {{
-            margin: 8px 0;
+            margin: 5px 0;
             display: flex;
         }}
         .info-label {{
             font-weight: 600;
             color: #333;
-            min-width: 100px;
+            min-width: 90px;
         }}
         .info-value {{
             color: #555;
         }}
         .sale-details {{
-            margin: 25px 0;
-            padding: 15px;
+            margin: 15px 0;
+            padding: 12px;
             background: #fff;
             border: 1px solid #ddd;
-            border-radius: 5px;
+            border-radius: 4px;
         }}
         .sale-row {{
-            margin: 10px 0;
-            font-size: 11pt;
+            margin: 8px 0;
+            font-size: 10pt;
         }}
         .amount {{
             font-weight: 600;
             color: #2c5282;
         }}
         .installment-section {{
-            margin: 25px 0;
+            margin: 15px 0;
         }}
         .installment-header {{
             font-weight: 600;
-            font-size: 11pt;
-            margin-bottom: 10px;
+            font-size: 10pt;
+            margin-bottom: 6px;
             color: #333;
             border-bottom: 1px solid #ddd;
-            padding-bottom: 5px;
+            padding-bottom: 4px;
         }}
         .installment-columns {{
             display: flex;
-            gap: 20px;
+            gap: 15px;
         }}
         .installment-col {{
             flex: 1;
         }}
         .installment-item {{
-            padding: 6px 10px;
-            margin: 4px 0;
+            padding: 4px 8px;
+            margin: 3px 0;
             background: #f5f5f5;
             border-radius: 3px;
-            font-size: 10pt;
+            font-size: 9pt;
         }}
         .totals-section {{
-            margin: 20px 0;
-            padding: 15px;
+            margin: 15px 0;
+            padding: 12px;
             background: #f0f4f8;
-            border-radius: 5px;
+            border-radius: 4px;
         }}
         .total-row {{
             display: flex;
             justify-content: space-between;
-            margin: 8px 0;
-            font-size: 11pt;
+            margin: 6px 0;
+            font-size: 10pt;
         }}
         .grand-total {{
             font-weight: bold;
-            font-size: 12pt;
+            font-size: 11pt;
             color: #1a1a1a;
             border-top: 2px solid #333;
-            padding-top: 10px;
-            margin-top: 10px;
+            padding-top: 8px;
+            margin-top: 8px;
         }}
         .footer {{
-            margin-top: 40px;
+            margin-top: 25px;
             text-align: center;
             border-top: 2px solid #333;
-            padding-top: 20px;
+            padding-top: 15px;
         }}
         .thank-you {{
-            font-size: 11pt;
+            font-size: 10pt;
             color: #333;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }}
         .company-footer {{
             font-weight: bold;
-            font-size: 12pt;
+            font-size: 11pt;
             color: #1a1a1a;
+        }}
+        .legal-name {{
+            font-size: 9pt;
+            color: #666;
+            margin-top: 8px;
         }}
     </style>
 </head>
@@ -190,8 +194,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
         <div class="company-name">{company_name}</div>
         <div class="company-info">
             KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA<br>
-            Telefon: (0322) 329 92 32<br>
-            Web: https://enesbeko.com
+            Telefon: (0322) 329 92 32 | Web: https://enesbeko.com
         </div>
     </div>
 
@@ -199,7 +202,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
         {"Satış Makbuzu" if is_pesin else "Taksitli Alışveriş - Satış Makbuzu"}
     </div>
 
-    <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 9pt;">
         <div><strong>Tarih:</strong> {tarih}</div>
         <div><strong>Saat:</strong> {saat}</div>
     </div>
@@ -286,8 +289,9 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
         # Footer
         html += """
     <div class="footer">
-        <div class="thank-you">MAĞAZAMIZDAN YAPMIŞ OLDUĞUNUZ ALIŞ VERİŞTEN DOLAYI TEŞEKKÜR EDERİZ</div>
+        <div class="thank-you">Mağazamızdan yapmış olduğunuz alış verişten dolayı teşekkür ederiz</div>
         <div class="company-footer">ENES BEKO</div>
+        <div class="legal-name">ENES EFY KARDEŞLER</div>
     </div>
 
     <script>
