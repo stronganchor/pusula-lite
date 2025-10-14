@@ -43,6 +43,7 @@ class PusulaLiteApp(tk.Tk):
 
         # Wire cross-tab references
         self.tab_search.detail_frame = self.tab_detail
+        self.tab_report = DailySalesReportFrame(self.notebook)
         self.tab_search.add_frame    = self.tab_add
         self.tab_search.sale_frame   = self.tab_sale
         self.tab_add.sale_frame      = self.tab_sale
@@ -54,6 +55,7 @@ class PusulaLiteApp(tk.Tk):
         self.notebook.add(self.tab_add,    text="Müşteri Tanıtım Bilgileri")
         self.notebook.add(self.tab_sale,   text="Satış Kaydet")
         self.notebook.add(self.tab_detail, text="Taksitli Satış Kayıt Bilgisi")
+        self.notebook.add(self.tab_report, text="Günlük Satış Raporu")
 
         # Keep Escape to quit
         self.bind_all("<Escape>", lambda e: self.quit())
