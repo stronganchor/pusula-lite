@@ -187,18 +187,28 @@ def perform_update(dialog):
 def check_and_update(parent_window):
     """Check for updates and prompt user to install."""
 
+    # DEBUG: Verify function is being called
+    print("DEBUG: check_and_update called")
+
     try:
         # Check if Git is available
-        success, _, _ = run_command(["git", "--version"])
+        success, stdout, stderr = run_command(["git", "--version"])
+        print(f"DEBUG: Git check - success={success}, stdout={stdout[:50] if stdout else 'None'}")
+
         if not success:
+            print("DEBUG: Git not available, skipping")
             return  # Silently skip if Git is not installed
 
         # Check for updates
+        print("DEBUG: Checking for updates...")
         has_updates, message = check_for_updates()
+        print(f"DEBUG: has_updates={has_updates}, message={message}")
 
         if not has_updates:
+            print("DEBUG: No updates found")
             return  # No updates, continue normally
 
+        print("DEBUG: Showing messagebox to user")
         # Ask user if they want to update
         response = messagebox.askyesno(
             "Güncelleme Mevcut",
@@ -207,8 +217,10 @@ def check_and_update(parent_window):
         )
 
         if not response:
+            print("DEBUG: User declined update")
             return  # User declined
 
+        print("DEBUG: User accepted, starting update")
         # Show progress dialog
         dialog = UpdateDialog(parent_window)
 
@@ -223,13 +235,16 @@ def check_and_update(parent_window):
         parent_window.wait_window(dialog)
 
     except Exception as e:
+        print(f"DEBUG: Exception occurred: {e}")
+        import traceback
+        traceback.print_exc()
         # Show any errors that occur
         messagebox.showerror(
             "Güncelleme Hatası",
             f"Güncelleme kontrolü sırasında hata oluştu:\n\n{str(e)}",
             parent=parent_window
         )
-
+        
 def update_thread():
     success = perform_update(dialog)
     if success:
