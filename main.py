@@ -1,5 +1,5 @@
 # main.py
-# Pusula-Lite — single-window, tabbed UI with search, add, sale, and detail
+# Pusula-Lite — single-window, tabbed UI with search, add, sale, and detail.
 
 import tkinter as tk
 from tkinter import ttk
