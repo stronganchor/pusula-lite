@@ -73,7 +73,7 @@ if not exist "data" mkdir data
 
 echo.
 echo === Step 7: Create desktop shortcut ===
-powershell -nop -c "$s=New-Object -ComObject WScript.Shell; $sc=$s.CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Pusula Lite.lnk'); $sc.TargetPath='%cd%\main.py'; $sc.Arguments=''; $sc.IconLocation='C:\Windows\py.exe,0'; $sc.Save();"
+powershell -nop -c "$s=New-Object -ComObject WScript.Shell; $sc=$s.CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Pusula Lite.lnk'); $sc.TargetPath='%SystemRoot%\System32\pythonw.exe'; $sc.Arguments='%cd%\main.py'; $sc.WorkingDirectory='%cd%'; $sc.IconLocation='C:\Windows\py.exe,0'; $sc.Save();"
 
 echo.
 echo === Kurulum tamam!  Çalıştırmak için:  %cd%\main.py  ===
