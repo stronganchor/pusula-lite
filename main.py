@@ -12,6 +12,7 @@ from customer_form import AddCustomerFrame
 from customer_search import CustomerSearchFrame
 from sale_form import SaleFrame
 from customer_detail import CustomerDetailFrame
+from daily_sales_report import DailySalesReportFrame
 
 class PusulaLiteApp(tk.Tk):
     """Root window with four always-available tabs."""
