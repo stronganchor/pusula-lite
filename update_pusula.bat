@@ -3,7 +3,7 @@ REM -------------------------------------------------------------
 REM  update_pusula.bat  —  Pull latest code, refresh dependencies
 REM -------------------------------------------------------------
 
-cd /d "%~dp0"          REM go to script directory
+cd /d "%~dp0"
 
 echo === Fetching latest code from GitHub ===
 git fetch origin
