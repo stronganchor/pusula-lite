@@ -58,6 +58,75 @@ class UpdateDialog(tk.Toplevel):
         self.update_status(message)
         self.after(2000, self.destroy)
 
+class ConfirmDialog(tk.Toplevel):
+    """Custom confirmation dialog with Turkish buttons."""
+
+    def __init__(self, parent, title, message):
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.result = False
+
+        # Center on parent
+        self.transient(parent)
+        self.grab_set()
+
+        # Message
+        msg_label = ttk.Label(
+            self,
+            text=message,
+            wraplength=350,
+            justify="left",
+            padding=20
+        )
+        msg_label.pack()
+
+        # Button frame
+        btn_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
+        btn_frame.pack(fill="x")
+
+        # Evet button
+        btn_yes = ttk.Button(
+            btn_frame,
+            text="Evet",
+            command=self.on_yes,
+            width=10
+        )
+        btn_yes.pack(side="right", padx=5)
+
+        # Hayır button
+        btn_no = ttk.Button(
+            btn_frame,
+            text="Hayır",
+            command=self.on_no,
+            width=10
+        )
+        btn_no.pack(side="right", padx=5)
+
+        # Center on screen
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f"+{x}+{y}")
+
+        # Focus on Evet button
+        btn_yes.focus_set()
+
+        # Bind Enter to Evet, Escape to Hayır
+        self.bind("<Return>", lambda e: self.on_yes())
+        self.bind("<Escape>", lambda e: self.on_no())
+
+        self.protocol("WM_DELETE_WINDOW", self.on_no)
+
+    def on_yes(self):
+        self.result = True
+        self.destroy()
+
+    def on_no(self):
+        self.result = False
+        self.destroy()
 
 def run_command(cmd, cwd=None):
     """Run a command without showing console window."""
@@ -247,7 +316,6 @@ def check_and_update(parent_window):
         success, stdout, stderr = run_command(["git", "--version"])
 
         if not success:
-            print("DEBUG: Git not available, skipping")
             return  # Silently skip if Git is not installed
 
         # Check for updates
@@ -256,31 +324,31 @@ def check_and_update(parent_window):
         if not has_updates:
             return  # No updates, continue normally
 
-        # Ask user if they want to update
-        response = messagebox.askyesno(
+        # Ask user if they want to update using custom Turkish dialog
+        dialog = ConfirmDialog(
+            parent_window,
             "Güncelleme Mevcut",
-            f"{message}\n\nŞimdi güncellemek ister misiniz?",
-            parent=parent_window
+            f"{message}\n\nŞimdi güncellemek ister misiniz?"
         )
+        parent_window.wait_window(dialog)
 
-        if not response:
+        if not dialog.result:
             return  # User declined
 
         # Show progress dialog
-        dialog = UpdateDialog(parent_window)
+        progress_dialog = UpdateDialog(parent_window)
 
         def update_thread():
-            success = perform_update(dialog)
+            success = perform_update(progress_dialog)
             if success:
                 parent_window.after(2500, lambda: restart_application(parent_window))
 
         threading.Thread(target=update_thread, daemon=True).start()
 
         # Wait for dialog to close
-        parent_window.wait_window(dialog)
+        parent_window.wait_window(progress_dialog)
 
     except Exception as e:
-        print(f"DEBUG: Exception occurred: {e}")
         import traceback
         traceback.print_exc()
         # Show any errors that occur
@@ -303,13 +371,14 @@ def update_thread():
 
 def restart_application(parent_window):
     """Restart the application after update."""
-    response = messagebox.askyesno(
+    dialog = ConfirmDialog(
+        parent_window,
         "Yeniden Başlat",
-        "Güncellemeler uygulandı. Uygulamayı şimdi yeniden başlatmak ister misiniz?",
-        parent=parent_window
+        "Güncellemeler uygulandı. Uygulamayı şimdi yeniden başlatmak ister misiniz?"
     )
+    parent_window.wait_window(dialog)
 
-    if response:
+    if dialog.result:
         python = sys.executable
         script = Path(__file__).parent / "main.py"
         subprocess.Popen([python, str(script)])
