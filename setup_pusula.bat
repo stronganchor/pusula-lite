@@ -1,9 +1,9 @@
 @echo off
+setlocal enabledelayedexpansion
 REM ---------------------------------------------------------------
 REM  Pusula Lite – first-time setup script  (Windows 10/11, 64-bit)
 REM ---------------------------------------------------------------
 
-setlocal
 REM >>> CHANGE THIS IF YOU WANT A DIFFERENT PYTHON VERSION <
 set PY_VER=3.12.3
 set PY_EXE=python-%PY_VER%-amd64.exe
@@ -37,23 +37,23 @@ if not exist "data" mkdir data
 
 echo.
 echo === Step 5: Locate pythonw.exe ===
-REM Try to use py.exe launcher to find real Python installation
 set PYTHONW_PATH=
+
+REM Try py.exe launcher first (most reliable)
 for /f "delims=" %%i in ('py -c "import sys; print(sys.executable)" 2^>nul') do set PYTHON_PATH=%%i
 
 if defined PYTHON_PATH (
-    REM Get the directory and find pythonw.exe
-    for %%i in ("%PYTHON_PATH%") do set PYTHON_DIR=%%~dpi
+    for %%i in ("!PYTHON_PATH!") do set PYTHON_DIR=%%~dpi
     set PYTHONW_PATH=!PYTHON_DIR!pythonw.exe
 
     if exist "!PYTHONW_PATH!" (
-        echo Found: !PYTHONW_PATH!
+        echo Found pythonw: !PYTHONW_PATH!
     ) else (
         echo pythonw.exe not found, using python.exe
         set PYTHONW_PATH=!PYTHON_PATH!
     )
 ) else (
-    REM Fallback: search PATH for python.exe, excluding WindowsApps
+    REM Fallback: search PATH, excluding WindowsApps
     for /f "delims=" %%i in ('where python 2^>nul') do (
         set TEST_PATH=%%i
         echo !TEST_PATH! | findstr /i /v "WindowsApps" >nul
