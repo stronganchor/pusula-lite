@@ -105,8 +105,9 @@ class PusulaLiteApp(tk.Tk):
             "border": "#2f3a4f",
             "fg": "#e6ecf3",
             "muted": "#c0cad8",
-            "accent": "#5fb0e5",
-            "accent_soft": "#3b6ea0",
+            "accent": "#88b7c9",       # soft teal-blue to reduce eye strain
+            "accent_soft": "#577487",  # muted accent for selections
+            "accent_warm": "#f0d7a7",  # gentle highlight for preview values
         }
 
         self.configure(bg=colors["bg"])
@@ -280,6 +281,11 @@ class PusulaLiteApp(tk.Tk):
         style.configure("TScrollbar", troughcolor=colors["panel"], bordercolor=colors["border"], background=colors["panel"])
         style.map("TScrollbar", background=[("active", colors["accent"])], arrowcolor=[("active", colors["bg"])])
         style.configure("TSeparator", background=colors["border"])
+        style.configure(
+            "PreviewValue.TLabel",
+            background=colors["bg"],
+            foreground=colors["accent_warm"],
+        )
 
     def _set_dark_titlebar(self) -> None:
         """On Windows, request a dark title bar to match the theme."""

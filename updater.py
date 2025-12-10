@@ -357,17 +357,6 @@ def check_and_update(parent_window):
             f"Güncelleme kontrolü sırasında hata oluştu:\n\n{str(e)}",
             parent=parent_window
         )
-        
-def update_thread():
-    success = perform_update(dialog)
-    if success:
-        parent_window.after(2500, lambda: restart_application(parent_window))
-
-    threading.Thread(target=update_thread, daemon=True).start()
-
-    # Wait for dialog to close
-    parent_window.wait_window(dialog)
-
 
 def restart_application(parent_window):
     """Restart the application after update."""

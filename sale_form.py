@@ -91,13 +91,13 @@ class SaleFrame(ttk.Frame):
         row += 1
 
         ttk.Label(self, text="Her Taksit Tutarı:").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_preview_amount, foreground="blue").grid(
+        ttk.Label(self, textvariable=self.var_preview_amount, style="PreviewValue.TLabel").grid(
             row=row, column=1, sticky="w", **pad
         )
         row += 1
 
         ttk.Label(self, text="Son Taksit Tarihi:").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_preview_last_date, foreground="blue").grid(
+        ttk.Label(self, textvariable=self.var_preview_last_date, style="PreviewValue.TLabel").grid(
             row=row, column=1, sticky="w", **pad
         )
         row += 1
