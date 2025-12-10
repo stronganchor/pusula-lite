@@ -9,6 +9,12 @@ from decimal import Decimal
 from pathlib import Path
 
 import db
+from sqlalchemy import func
+
+TURKISH_MONTHS = [
+    "", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
+]
 
 
 def format_currency(amount: Decimal) -> str:
@@ -323,4 +329,220 @@ def print_receipt(sale_id: int, company_name: str = "ENES BEKO") -> bool:
 
     except Exception as e:
         print(f"Error printing receipt: {e}")
+        return False
+
+
+def generate_payment_receipt_html(
+    customer_id: int,
+    year: int,
+    month: int,
+    company_name: str = "ENES BEKO",
+) -> str:
+    """Generate HTML for an installment payment receipt."""
+    month_name = TURKISH_MONTHS[month] if 0 <= month < len(TURKISH_MONTHS) else str(month)
+
+    with db.session() as s:
+        customer_row = (
+            s.query(db.Customer.id, db.Customer.name, db.Customer.address)
+             .filter_by(id=customer_id)
+             .first()
+        )
+        if not customer_row:
+            raise ValueError(f"Müşteri {customer_id} bulunamadı")
+
+        rows = [
+            (due_date, amount, sale_id)
+            for due_date, amount, sale_id in (
+                s.query(
+                    db.Installment.due_date,
+                    db.Installment.amount,
+                    db.Sale.id,
+                )
+                .join(db.Sale)
+                .filter(
+                    db.Sale.customer_id == customer_id,
+                    func.strftime("%Y", db.Installment.due_date) == str(year),
+                    func.strftime("%m", db.Installment.due_date) == f"{month:02d}",
+                    db.Installment.paid == 1,
+                )
+                .order_by(db.Installment.due_date)
+                .all()
+            )
+        ]
+
+    if not rows:
+        raise ValueError("Bu ay için ödenmiş taksit bulunamadı.")
+
+    customer_id, customer_name, customer_address = customer_row
+    total_paid = sum(amount for _, amount, _ in rows)
+    now = datetime.now()
+    tarih = now.strftime("%d/%m/%Y")
+    saat = now.strftime("%H:%M")
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Ödeme Makbuzu - {customer_name}</title>
+    <style>
+        @media print {{
+            @page {{
+                margin: 0;
+                size: A4;
+            }}
+            body {{ margin: 0; }}
+        }}
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 10pt;
+            line-height: 1.4;
+            max-width: 21cm;
+            margin: 0 auto;
+            padding: 1.5cm 1.5cm;
+        }}
+        .header {{
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 12px;
+        }}
+        .company-name {{
+            font-size: 18pt;
+            font-weight: bold;
+            color: #1a1a1a;
+            margin-bottom: 6px;
+        }}
+        .company-info {{
+            font-size: 9pt;
+            color: #444;
+            line-height: 1.3;
+        }}
+        .title {{
+            font-size: 13pt;
+            font-weight: bold;
+            margin: 18px 0 12px 0;
+            text-align: center;
+            color: #1a1a1a;
+        }}
+        .info-row {{
+            margin: 4px 0;
+        }}
+        .label {{
+            font-weight: 600;
+            color: #333;
+            min-width: 110px;
+            display: inline-block;
+        }}
+        .table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }}
+        .table th, .table td {{
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+            font-size: 9pt;
+            text-align: left;
+        }}
+        .table th {{
+            background: #f2f4f7;
+            font-weight: 600;
+        }}
+        .total {{
+            margin-top: 12px;
+            text-align: right;
+            font-weight: bold;
+            font-size: 11pt;
+        }}
+        .footer {{
+            margin-top: 25px;
+            text-align: center;
+            border-top: 2px solid #333;
+            padding-top: 15px;
+        }}
+        .thank-you {{
+            font-size: 10pt;
+            color: #333;
+            margin-bottom: 8px;
+        }}
+        .company-footer {{
+            font-weight: bold;
+            font-size: 11pt;
+            color: #1a1a1a;
+        }}
+        .legal-name {{
+            font-size: 9pt;
+            color: #666;
+            margin-top: 8px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="company-name">{company_name}</div>
+        <div class="company-info">
+            KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA<br>
+            Telefon: (0322) 329 92 32 | Web: https://enesbeko.com
+        </div>
+    </div>
+
+    <div class="title">{month_name} {year} Taksit Ödemesi</div>
+
+    <div class="info-row"><span class="label">Tarih:</span> {tarih}</div>
+    <div class="info-row"><span class="label">Saat:</span> {saat}</div>
+    <div class="info-row"><span class="label">Hesap No:</span> {customer_id}</div>
+    <div class="info-row"><span class="label">Müşteri:</span> {customer_name}</div>
+    <div class="info-row"><span class="label">Adres:</span> {customer_address or ""}</div>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Taksit Tarihi</th>
+                <th>Tutar</th>
+                <th>Satış No</th>
+            </tr>
+        </thead>
+        <tbody>"""
+
+    for due_date, amount, sale_id in rows:
+        html += f"""
+            <tr>
+                <td>{due_date.strftime("%d/%m/%Y")}</td>
+                <td>{format_currency(amount)} TL</td>
+                <td>{sale_id}</td>
+            </tr>"""
+
+    html += f"""
+        </tbody>
+    </table>
+
+    <div class="total">Toplam Ödenen: {format_currency(total_paid)} TL</div>
+
+    <div class="footer">
+        <div class="thank-you">Mağazamızdan yapmış olduğunuz ödeme için teşekkür ederiz</div>
+        <div class="company-footer">{company_name}</div>
+        <div class="legal-name">ENES EFY KARDEŞLER</div>
+    </div>
+
+    <script>
+        window.onload = function() {{
+            window.print();
+        }}
+    </script>
+</body>
+</html>"""
+    return html
+
+
+def print_payment_receipt(customer_id: int, year: int, month: int, company_name: str = "ENES BEKO") -> bool:
+    """Generate payment receipt HTML and open in browser for printing."""
+    try:
+        html = generate_payment_receipt_html(customer_id, year, month, company_name)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as f:
+            f.write(html)
+            temp_path = f.name
+        webbrowser.open("file://" + temp_path)
+        return True
+    except Exception as e:
+        print(f"Error printing payment receipt: {e}")
         return False

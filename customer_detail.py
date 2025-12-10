@@ -14,6 +14,8 @@ from sqlalchemy import func
 
 import db
 import app_state
+import updater
+import receipt_printer
 
 # Turkish month names, index 1–12
 TURKISH_MONTHS = [
@@ -235,8 +237,8 @@ class CustomerDetailFrame(ttk.Frame):
         self.report_tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         self.rowconfigure(row, weight=1)
 
-        # Bind selection for undo payment button
-        self.report_tree.bind("<<TreeviewSelect>>", lambda e: self.update_undo_button())
+        # Bind selection for payment actions
+        self.report_tree.bind("<<TreeviewSelect>>", lambda e: self.update_payment_buttons())
 
         row += 1
 
@@ -276,6 +278,11 @@ class CustomerDetailFrame(ttk.Frame):
             pay_frame, text="Ödemeyi Geri Al", command=self.undo_payment, state="disabled"
         )
         self.btn_undo_payment.grid(row=0, column=5, padx=4, pady=2)
+
+        self.btn_print_payment = ttk.Button(
+            pay_frame, text="Makbuz Yazdır", command=self.print_selected_payment, state="disabled"
+        )
+        self.btn_print_payment.grid(row=0, column=6, padx=4, pady=2)
 
         # Initial population
         self.load_customer()
@@ -526,6 +533,7 @@ class CustomerDetailFrame(ttk.Frame):
     
         # keep grouped for update_payment_amount
         self.current_grouped = grouped
+        self.update_payment_buttons()
 
 
     def update_payment_amount(self) -> None:
@@ -538,20 +546,20 @@ class CustomerDetailFrame(ttk.Frame):
         self.payment_amount_var.set(format_currency(amt))
 
 
-    def update_undo_button(self) -> None:
-        """Enable 'Ödemeyi Geri Al' button only if a paid month is selected."""
+    def update_payment_buttons(self) -> None:
+        """Enable/disable undo and print buttons based on selection."""
         selection = self.report_tree.selection()
         if not selection:
             self.btn_undo_payment.config(state="disabled")
+            self.btn_print_payment.config(state="disabled")
             return
 
         item = self.report_tree.item(selection[0])
         paid_status = item["values"][2]  # "Evet" or "Hayır"
+        is_paid = paid_status == "Evet"
 
-        if paid_status == "Evet":
-            self.btn_undo_payment.config(state="normal")
-        else:
-            self.btn_undo_payment.config(state="disabled")
+        self.btn_undo_payment.config(state="normal" if is_paid else "disabled")
+        self.btn_print_payment.config(state="normal" if is_paid else "disabled")
 
 
     def save_payment(self) -> None:
@@ -559,6 +567,9 @@ class CustomerDetailFrame(ttk.Frame):
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
         month_name = self.payment_month_var.get()
+        if not month_name or month_name not in TURKISH_MONTHS:
+            messagebox.showwarning("Eksik Bilgi", "Ödeme ayı seçiniz.")
+            return
         m = TURKISH_MONTHS.index(month_name)
 
         with db.session() as s:
@@ -572,10 +583,14 @@ class CustomerDetailFrame(ttk.Frame):
                  )
                  .all()
             )
+            if not insts:
+                messagebox.showwarning("Bulunamadı", f"{month_name} ayı için taksit bulunamadı.")
+                return
             for inst in insts:
                 inst.paid = 1
 
         messagebox.showinfo("Ödeme Kaydedildi", f"{month_name} taksitleri ödendi.")
+        self._ask_print_payment_receipt(cust_id, year, m)
         self.load_report()
 
 
@@ -618,3 +633,38 @@ class CustomerDetailFrame(ttk.Frame):
 
         messagebox.showinfo("Geri Alındı", f"{month_name} ödemesi geri alındı.")
         self.load_report()
+
+    def _ask_print_payment_receipt(self, cust_id: int, year: int, month: int) -> None:
+        """Prompt and print a payment receipt for the given month/year."""
+        month_name = TURKISH_MONTHS[month]
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
+            "Makbuz",
+            f"{month_name} ödemesi kaydedildi.\n\nMakbuz yazdırılsın mı?"
+        )
+        self.wait_window(dialog)
+        if dialog.result:
+            self._print_payment_receipt(cust_id, year, month)
+
+    def _print_payment_receipt(self, cust_id: int, year: int, month: int) -> None:
+        """Generate and open payment receipt for a paid month."""
+        ok = receipt_printer.print_payment_receipt(cust_id, year, month)
+        if not ok:
+            messagebox.showerror("Yazdırma Hatası", "Makbuz yazdırılırken bir hata oluştu.")
+
+    def print_selected_payment(self) -> None:
+        """Print a receipt for the selected (paid) month in the report table."""
+        selection = self.report_tree.selection()
+        if not selection:
+            return
+        item = self.report_tree.item(selection[0])
+        month_name, _, paid_status = item["values"]
+        if paid_status != "Evet":
+            messagebox.showinfo("Bilgi", "Ödenmiş bir ay seçiniz.")
+            return
+        if month_name not in TURKISH_MONTHS:
+            return
+        month = TURKISH_MONTHS.index(month_name)
+        cust_id = int(self.var_id.get())
+        year = int(self.report_year_var.get())
+        self._print_payment_receipt(cust_id, year, month)

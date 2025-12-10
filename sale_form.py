@@ -85,7 +85,7 @@ class SaleFrame(ttk.Frame):
         )
         row += 1
 
-        ttk.Label(self, text="Önizleme", font=("TkDefaultFont", 9, "bold")).grid(
+        ttk.Label(self, text="Önizleme", font="TkHeadingFont").grid(
             row=row, column=0, columnspan=4, sticky="w", **pad
         )
         row += 1

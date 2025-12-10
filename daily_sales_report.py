@@ -74,14 +74,14 @@ class DailySalesReportFrame(ttk.Frame):
         ttk.Label(summary_frame, text="Toplam Satış Tutarı:").grid(
             row=0, column=0, sticky="e", padx=4, pady=2
         )
-        ttk.Label(summary_frame, textvariable=self.var_total_sales, font=("", 10, "bold")).grid(
+        ttk.Label(summary_frame, textvariable=self.var_total_sales, font="TkHeadingFont").grid(
             row=0, column=1, sticky="w", padx=4, pady=2
         )
 
         ttk.Label(summary_frame, text="Satış Sayısı:").grid(
             row=0, column=2, sticky="e", padx=12, pady=2
         )
-        ttk.Label(summary_frame, textvariable=self.var_num_sales, font=("", 10, "bold")).grid(
+        ttk.Label(summary_frame, textvariable=self.var_num_sales, font="TkHeadingFont").grid(
             row=0, column=3, sticky="w", padx=4, pady=2
         )
 

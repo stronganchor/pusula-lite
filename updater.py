@@ -25,7 +25,7 @@ class UpdateDialog(tk.Toplevel):
         self.status_label = ttk.Label(
             self,
             text="Güncelleme kontrol ediliyor...",
-            font=("", 10)
+            font="TkHeadingFont"
         )
         self.status_label.pack(pady=20)
 
@@ -39,7 +39,7 @@ class UpdateDialog(tk.Toplevel):
         self.progress.start(10)
 
         # Detail label
-        self.detail_label = ttk.Label(self, text="", font=("", 8))
+        self.detail_label = ttk.Label(self, text="", font=("TkTextFont", 11))
         self.detail_label.pack(pady=5)
 
         self.protocol("WM_DELETE_WINDOW", lambda: None)  # Disable close
