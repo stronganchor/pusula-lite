@@ -47,13 +47,16 @@ class SaleEditDialog(tk.Toplevel):
     def __init__(self, parent, sale_id: int, current_date: date, current_total: decimal.Decimal, current_desc: str):
         super().__init__(parent)
         self.title("Satışı Düzelt")
-        self.geometry("500x250")
-        self.resizable(False, False)
+        self.geometry("840x600")
+        self.minsize(720, 500)
+        self.resizable(True, True)
 
         self.result = None
         self.sale_id = sale_id
 
         pad = {"padx": 8, "pady": 4}
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         # Date
         ttk.Label(self, text="Tarih (YYYY-MM-DD):").grid(row=0, column=0, sticky="e", **pad)
@@ -67,20 +70,30 @@ class SaleEditDialog(tk.Toplevel):
 
         # Description
         ttk.Label(self, text="Açıklama:").grid(row=2, column=0, sticky="ne", **pad)
-        self.txt_desc = tk.Text(self, width=40, height=6, wrap="word")
-        self.txt_desc.grid(row=2, column=1, sticky="w", **pad)
+        desc_frame = ttk.Frame(self)
+        desc_frame.grid(row=2, column=1, sticky="nsew", **pad)
+        desc_frame.columnconfigure(0, weight=1)
+        desc_frame.rowconfigure(0, weight=1)
+        self.txt_desc = tk.Text(desc_frame, wrap="word")
+        yscroll = ttk.Scrollbar(desc_frame, orient="vertical", command=self.txt_desc.yview)
+        self.txt_desc.configure(yscrollcommand=yscroll.set)
+        self.txt_desc.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        self.txt_desc.bind("<Tab>", lambda e: self._focus_next_widget(self.txt_desc))
+        self.txt_desc.bind("<Shift-Tab>", lambda e: self._focus_next_widget(self.txt_desc, reverse=True))
         if current_desc:
             self.txt_desc.insert("1.0", current_desc)
 
         # Buttons
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=16)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=16, sticky="e")
         ttk.Button(btn_frame, text="Kaydet", command=self.save).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="İptal", command=self.cancel).pack(side="left", padx=4)
 
         # Make modal
         self.transient(parent)
         self.grab_set()
+        self._center_on_screen()
 
     def save(self):
         """Validate and save changes."""
@@ -111,6 +124,24 @@ class SaleEditDialog(tk.Toplevel):
         """Close without saving."""
         self.result = None
         self.destroy()
+
+    def _focus_next_widget(self, widget: tk.Widget, reverse: bool = False) -> str:
+        """Move focus forward/backward instead of inserting tabs in text widgets."""
+        next_widget = widget.tk_focusPrev() if reverse else widget.tk_focusNext()
+        if next_widget:
+            next_widget.focus_set()
+        return "break"
+
+    def _center_on_screen(self) -> None:
+        """Center the dialog on the current screen."""
+        self.update_idletasks()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 3  # slight upward bias
+        self.geometry(f"+{x}+{y}")
 
 
 class CustomerDetailFrame(ttk.Frame):
@@ -347,7 +378,7 @@ class CustomerDetailFrame(ttk.Frame):
                     sid,
                     dt_.strftime("%Y-%m-%d"),
                     format_currency(tot),
-                    desc or ""
+                    self._preview_description(desc)
                 ),
             )
 
@@ -365,6 +396,21 @@ class CustomerDetailFrame(ttk.Frame):
         state = "normal" if has_selection else "disabled"
         self.btn_edit_sale.config(state=state)
         self.btn_delete_sale.config(state=state)
+
+    def _preview_description(self, desc: str | None, max_len: int = 60) -> str:
+        """Compact description for table view, with ellipsis for truncation/multi-line."""
+        if not desc:
+            return ""
+        flat = " ".join(desc.split())
+        had_newline = "\n" in desc
+        truncated = False
+        if len(flat) > max_len:
+            flat = flat[: max_len - 3].rstrip()
+            truncated = True
+        if truncated or had_newline:
+            if not flat.endswith("..."):
+                flat = flat + "..."
+        return flat
 
 
     def edit_sale(self) -> None:

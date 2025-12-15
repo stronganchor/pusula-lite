@@ -28,93 +28,118 @@ class SaleFrame(ttk.Frame):
         self.var_total         = tk.StringVar()
         self.var_down          = tk.StringVar(value="0")
         self.var_n_inst        = tk.StringVar(value="1")
+        self.var_due_day       = tk.StringVar(value=str(min(dt.date.today().day, 28)))
 
         # Preview variables
         self.var_preview_amount = tk.StringVar(value="—")
         self.var_preview_last_date = tk.StringVar(value="—")
 
         pad = {"padx": 8, "pady": 4}
+
+        # Layout: two columns (left inputs, right description)
+        self.columnconfigure(0, weight=1, uniform="form")
+        self.columnconfigure(1, weight=1, uniform="form")
+        self.rowconfigure(0, weight=1)
+
+        left = ttk.Frame(self)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 4))
+        left.columnconfigure(1, weight=1)
+        left.columnconfigure(3, weight=1)
+
+        right = ttk.Frame(self)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=(0, 4))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+
         row = 0
 
         # Customer selector
-        ttk.Label(self, text="Müşteri No *").grid(row=row, column=0, sticky="e", **pad)
-        ent_id = ttk.Entry(self, textvariable=self.var_customer_id, width=10)
+        ttk.Label(left, text="Müşteri No *").grid(row=row, column=0, sticky="e", **pad)
+        ent_id = ttk.Entry(left, textvariable=self.var_customer_id, width=10)
         ent_id.grid(row=row, column=1, sticky="w", **pad)
         ent_id.bind("<FocusOut>", self.load_customer)
-        ttk.Label(self, text="Adı Soyadı:").grid(row=row, column=2, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_customer_name).grid(
+        ttk.Label(left, text="Adı Soyadı:").grid(row=row, column=2, sticky="e", **pad)
+        ttk.Label(left, textvariable=self.var_customer_name).grid(
             row=row, column=3, sticky="w", **pad
         )
         row += 1
 
         # Date
-        ttk.Label(self, text="Tarih (YYYY-MM-DD)").grid(row=row, column=0, sticky="e", **pad)
-        ent_date = ttk.Entry(self, textvariable=self.var_date, width=15)
+        ttk.Label(left, text="Tarih (YYYY-MM-DD)").grid(row=row, column=0, sticky="e", **pad)
+        ent_date = ttk.Entry(left, textvariable=self.var_date, width=15)
         ent_date.grid(row=row, column=1, sticky="w", **pad)
         ent_date.bind("<KeyRelease>", lambda e: self.update_preview())
         row += 1
 
         # Amounts
-        ttk.Label(self, text="Toplam Tutar *").grid(row=row, column=0, sticky="e", **pad)
-        ent_total = ttk.Entry(self, textvariable=self.var_total, width=15)
+        ttk.Label(left, text="Toplam Tutar *").grid(row=row, column=0, sticky="e", **pad)
+        ent_total = ttk.Entry(left, textvariable=self.var_total, width=15)
         ent_total.grid(row=row, column=1, sticky="w", **pad)
         ent_total.bind("<KeyRelease>", lambda e: self.update_preview())
         row += 1
 
-        ttk.Label(self, text="Peşinat").grid(row=row, column=0, sticky="e", **pad)
-        ent_down = ttk.Entry(self, textvariable=self.var_down, width=15)
+        ttk.Label(left, text="Peşinat").grid(row=row, column=0, sticky="e", **pad)
+        ent_down = ttk.Entry(left, textvariable=self.var_down, width=15)
         ent_down.grid(row=row, column=1, sticky="w", **pad)
         ent_down.bind("<KeyRelease>", lambda e: self.update_preview())
         row += 1
 
-        ttk.Label(self, text="Taksit Sayısı *").grid(row=row, column=0, sticky="e", **pad)
-        ent_n_inst = ttk.Entry(self, textvariable=self.var_n_inst, width=5)
+        ttk.Label(left, text="Taksit Sayısı *").grid(row=row, column=0, sticky="e", **pad)
+        ent_n_inst = ttk.Entry(left, textvariable=self.var_n_inst, width=5)
         ent_n_inst.grid(row=row, column=1, sticky="w", **pad)
         ent_n_inst.bind("<KeyRelease>", lambda e: self.update_preview())
         row += 1
 
-        # Açıklama
-        ttk.Label(self, text="Açıklama").grid(row=row, column=0, sticky="ne", **pad)
-        self.txt_description = tk.Text(self, width=60, height=4, wrap="word")
-        self.txt_description.grid(row=row, column=1, columnspan=3, sticky="w", **pad)
+        ttk.Label(left, text="Ödeme Günü (1-28)").grid(row=row, column=0, sticky="e", **pad)
+        ent_due_day = ttk.Entry(left, textvariable=self.var_due_day, width=5)
+        ent_due_day.grid(row=row, column=1, sticky="w", **pad)
+        ent_due_day.bind("<KeyRelease>", lambda e: self.update_preview())
         row += 1
+
+        # Açıklama (right column, tall with scrollbar)
+        ttk.Label(right, text="Açıklama").grid(row=0, column=0, sticky="w", **pad)
+        self.txt_description = tk.Text(right, width=60, height=20, wrap="word")
+        self.txt_description.grid(row=1, column=0, sticky="nsew", **pad)
+        scroll = ttk.Scrollbar(right, orient="vertical", command=self.txt_description.yview)
+        scroll.grid(row=1, column=1, sticky="ns", pady=pad["pady"])
+        self.txt_description.configure(yscrollcommand=scroll.set)
 
         # Preview section
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=4, sticky="ew", **pad
+            row=1, column=0, columnspan=2, sticky="ew", **pad
         )
-        row += 1
 
-        ttk.Label(self, text="Önizleme", font="TkHeadingFont").grid(
-            row=row, column=0, columnspan=4, sticky="w", **pad
-        )
-        row += 1
+        preview = ttk.Frame(self)
+        preview.grid(row=2, column=0, columnspan=2, sticky="ew")
+        preview.columnconfigure(1, weight=1)
 
-        ttk.Label(self, text="Her Taksit Tutarı:").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_preview_amount, style="PreviewValue.TLabel").grid(
-            row=row, column=1, sticky="w", **pad
+        prow = 0
+        ttk.Label(preview, text="Önizleme", font="TkHeadingFont").grid(
+            row=prow, column=0, columnspan=2, sticky="w", **pad
         )
-        row += 1
+        prow += 1
 
-        ttk.Label(self, text="Son Taksit Tarihi:").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_preview_last_date, style="PreviewValue.TLabel").grid(
-            row=row, column=1, sticky="w", **pad
+        ttk.Label(preview, text="Her Taksit Tutarı:").grid(row=prow, column=0, sticky="e", **pad)
+        ttk.Label(preview, textvariable=self.var_preview_amount, style="PreviewValue.TLabel").grid(
+            row=prow, column=1, sticky="w", **pad
         )
-        row += 1
+        prow += 1
+
+        ttk.Label(preview, text="Son Taksit Tarihi:").grid(row=prow, column=0, sticky="e", **pad)
+        ttk.Label(preview, textvariable=self.var_preview_last_date, style="PreviewValue.TLabel").grid(
+            row=prow, column=1, sticky="w", **pad
+        )
 
         ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=4, sticky="ew", **pad
+            row=3, column=0, columnspan=2, sticky="ew", **pad
         )
-        row += 1
 
         # Buttons
-        ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
-            row=row, column=1, sticky="e", **pad
-        )
-        ttk.Button(self, text="Vazgeç", command=self.clear_all).grid(
-            row=row, column=2, sticky="w", **pad
-        )
-        self.bind_all("<F10>", lambda e: self.save())
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=4, column=0, columnspan=2, sticky="e", pady=(0, 4))
+        ttk.Button(btn_frame, text="Kaydet (F10)", command=self.save).grid(row=0, column=0, **pad)
+        ttk.Button(btn_frame, text="Vazgeç", command=self.clear_all).grid(row=0, column=1, **pad)
+        self.bind_all("<F10>", self._on_f10, add="+")
 
         # Load default customer
         self.load_customer()
@@ -154,13 +179,20 @@ class SaleFrame(ttk.Frame):
             down = Decimal(self.var_down.get())
             n_inst = int(self.var_n_inst.get())
             sale_date = dt.date.fromisoformat(self.var_date.get())
+            due_day = int(self.var_due_day.get())
 
-            if total <= 0 or n_inst < 1 or down < 0 or down > total:
+            if (
+                total <= 0
+                or n_inst < 1
+                or down < 0
+                or down > total
+                or not (1 <= due_day <= 28)
+            ):
                 raise ValueError
 
             remaining = total - down
             inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
-            last_date = sale_date + dt.timedelta(days=30 * n_inst)
+            last_date = self._compute_due_date(sale_date, due_day, n_inst)
 
             self.var_preview_amount.set(f"{inst_amount:,.2f} ₺")
             self.var_preview_last_date.set(last_date.strftime("%Y-%m-%d"))
@@ -168,6 +200,13 @@ class SaleFrame(ttk.Frame):
         except (InvalidOperation, ValueError):
             self.var_preview_amount.set("—")
             self.var_preview_last_date.set("—")
+
+    def _compute_due_date(self, sale_date: dt.date, due_day: int, month_offset: int) -> dt.date:
+        """Return the due date `month_offset` months after sale_date on the given day."""
+        month_index = (sale_date.month - 1) + month_offset
+        year = sale_date.year + month_index // 12
+        month = (month_index % 12) + 1
+        return dt.date(year, month, due_day)
 
     def save(self) -> None:
         """Validate inputs, save sale + installments + açıklama."""
@@ -193,10 +232,20 @@ class SaleFrame(ttk.Frame):
             total = Decimal(self.var_total.get())
             down = Decimal(self.var_down.get())
             n_inst = int(self.var_n_inst.get())
-            if total <= 0 or n_inst < 1 or down < 0 or down > total:
+            due_day = int(self.var_due_day.get())
+            if (
+                total <= 0
+                or n_inst < 1
+                or down < 0
+                or down > total
+                or not (1 <= due_day <= 28)
+            ):
                 raise ValueError
         except (InvalidOperation, ValueError):
-            messagebox.showwarning("Hatalı Giriş", "Tutarlar geçerli sayı olmalıdır.")
+            messagebox.showwarning(
+                "Hatalı Giriş",
+                "Tutarlar geçerli sayı olmalıdır ve ödeme günü 1-28 arasında olmalıdır.",
+            )
             return
     
         remaining = total - down
@@ -215,7 +264,7 @@ class SaleFrame(ttk.Frame):
             s.flush()
             sale_id = sale.id
             for i in range(1, n_inst + 1):
-                due = sale_date + dt.timedelta(days=30 * i)
+                due = self._compute_due_date(sale_date, due_day, i)
                 s.add(db.Installment(
                     sale_id=sale.id,
                     due_date=due,
@@ -244,6 +293,7 @@ class SaleFrame(ttk.Frame):
         self.var_total.set("")
         self.var_down.set("0")
         self.var_n_inst.set("1")
+        self.var_due_day.set(str(min(dt.date.today().day, 28)))
         self.txt_description.delete("1.0", tk.END)
         self.var_preview_amount.set("—")
         self.var_preview_last_date.set("—")
@@ -252,3 +302,10 @@ class SaleFrame(ttk.Frame):
         """Called by customer_form: set and load given customer."""
         self.var_customer_id.set(str(cid))
         self.load_customer()
+
+    def _on_f10(self, event: tk.Event) -> str | None:
+        """Fire save only when this tab is active."""
+        if self.master.select() != str(self):
+            return None
+        self.save()
+        return "break"

@@ -17,7 +17,7 @@ class AddCustomerFrame(ttk.Frame):
     """“Müşteri Tanıtım Bilgileri” tab, for both new and existing customers."""
 
     def __init__(self, master: tk.Misc | None = None) -> None:
-        super().__init__(master, padding=8)
+        super().__init__(master)
 
         # ---- Variables ----
         self.var_id             = tk.StringVar()
@@ -38,124 +38,215 @@ class AddCustomerFrame(ttk.Frame):
         self.c2_home            = tk.StringVar()
         self.c2_work            = tk.StringVar()
 
-        pad = {"padx": 8, "pady": 4}
-        row = 0
+        # Layout: scrollable form so buttons stay reachable on small screens
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
 
-        # --- Müşteri No + Kayıt Tarihi ---
-        ttk.Label(self, text="Müşteri No:").grid(row=row, column=0, sticky="e", **pad)
-        entry_id = ttk.Entry(self, textvariable=self.var_id, width=10)
-        entry_id.grid(row=row, column=1, sticky="w", **pad)
+        container = ttk.Frame(self)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        style = ttk.Style(self)
+        # Button styles with a clearer focus outline
+        style.configure("Form.TButton", padding=(10, 6))
+        style.configure("FormFocus.TButton", padding=(10, 6), relief="solid", borderwidth=2)
+        bg = style.lookup("TFrame", "background")
+        if not bg:
+            try:
+                bg = self.winfo_toplevel().cget("background")
+            except Exception:
+                bg = "#0f141e"
+
+        self._canvas = tk.Canvas(
+            container,
+            highlightthickness=0,
+            background=bg,
+        )
+        vscroll = ttk.Scrollbar(container, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vscroll.set)
+        self._canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+
+        self._form = ttk.Frame(self._canvas, padding=8)
+        self._form_window = self._canvas.create_window((0, 0), window=self._form, anchor="nw")
+        self._form.bind(
+            "<Configure>",
+            lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")),
+        )
+        self._canvas.bind(
+            "<Configure>",
+            lambda e: self._canvas.itemconfigure(
+                self._form_window,
+                width=e.width,
+                height=max(self._form.winfo_reqheight(), e.height),
+            ),
+        )
+        self._form.bind("<Enter>", lambda e: self._canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+"))
+        self._form.bind("<Leave>", lambda e: self._canvas.unbind_all("<MouseWheel>"))
+
+        pad = {"padx": 8}
+        field_gap = (0, 12)
+        first_field_gap = (12, 12)
+
+        self._form.columnconfigure(0, weight=1)
+        self._form.columnconfigure(1, weight=1)
+        self._form.rowconfigure(2, weight=1)
+        self._form.rowconfigure(3, weight=1)
+
+        # --- Müşteri No + Kayıt Tarihi (spans both columns) ---
+        header = ttk.Frame(self._form)
+        header.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        ttk.Label(header, text="Müşteri No:").grid(row=0, column=0, sticky="e", **pad)
+        entry_id = ttk.Entry(header, textvariable=self.var_id, width=10)
+        entry_id.grid(row=0, column=1, sticky="w", **pad)
         entry_id.bind("<FocusOut>", lambda e: self.load_customer())
 
-        ttk.Label(self, text="Kayıt Tarihi:").grid(row=row, column=2, sticky="e", **pad)
-        ttk.Label(self, textvariable=self.var_reg_date).grid(
-            row=row, column=3, sticky="w", **pad
+        ttk.Label(header, text="Kayıt Tarihi:").grid(row=0, column=2, sticky="e", **pad)
+        ttk.Label(header, textvariable=self.var_reg_date).grid(
+            row=0, column=3, sticky="w", **pad
         )
-        row += 1
 
-        # --- Adı Soyadı + Telefon ---
-        ttk.Label(self, text="Adı Soyadı *").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.var_name, width=40).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        ttk.Separator(self._form, orient="horizontal").grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=pad["padx"], pady=(4, 14)
         )
-        row += 1
 
-        ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.var_phone, width=25).grid(
-            row=row, column=1, sticky="w", **pad
-        )
-        row += 1
+        # --- Left column: primary info ---
+        left = ttk.Frame(self._form)
+        left.grid(row=2, column=0, sticky="nsew", padx=(0, 12))
+        left.columnconfigure(1, weight=1)
+        row_left = 0
 
-        ttk.Separator(self, orient="horizontal") \
-            .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
-        row += 1
+        ttk.Label(left, text="Adı Soyadı *").grid(row=row_left, column=0, sticky="e", pady=first_field_gap, padx=pad["padx"])
+        ttk.Entry(left, textvariable=self.var_name, width=40).grid(
+            row=row_left, column=1, sticky="ew", pady=first_field_gap, padx=pad["padx"]
+        )
+        row_left += 1
 
-        # --- Ev / İş Adresi + Özel Notu ---
-        ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_address, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        ttk.Label(left, text="Telefon").grid(row=row_left, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(left, textvariable=self.var_phone, width=25).grid(
+            row=row_left, column=1, sticky="w", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
+        row_left += 1
 
-        ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_work_address, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        ttk.Label(left, text="Ev Adresi").grid(row=row_left, column=0, sticky="ne", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(left, textvariable=self.var_address, width=60).grid(
+            row=row_left, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
+        row_left += 1
 
-        ttk.Label(self, text="Özel Notu").grid(row=row, column=0, sticky="ne", **pad)
-        ttk.Entry(self, textvariable=self.var_notes, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        ttk.Label(left, text="İş Adresi").grid(row=row_left, column=0, sticky="ne", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(left, textvariable=self.var_work_address, width=60).grid(
+            row=row_left, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
+        row_left += 1
 
-        ttk.Separator(self, orient="horizontal") \
-            .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
-        row += 1
+        ttk.Label(left, text="Notlar").grid(row=row_left, column=0, sticky="ne", pady=field_gap, padx=pad["padx"])
+        left.rowconfigure(row_left, weight=1)
+        self._notes_text = tk.Text(left, height=8, wrap="word")
+        self._notes_text.grid(
+            row=row_left, column=1, sticky="nsew", pady=field_gap, padx=pad["padx"]
+        )
+        self._notes_text.bind("<Tab>", lambda e: self._focus_next_widget(self._notes_text))
+        self._notes_text.bind("<Shift-Tab>", lambda e: self._focus_next_widget(self._notes_text, reverse=True))
 
-        # --- Ek Kişi 1 ---
-        ttk.Label(self, text="Ek Kişi 1").grid(row=row, column=0, sticky="w", **pad)
-        row += 1
-        ttk.Label(self, text="Adı Soyadı").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_name, width=30).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
-        )
-        row += 1
-        ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_phone, width=25).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
-        )
-        row += 1
-        ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_home, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
-        )
-        row += 1
-        ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c1_work, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
-        )
-        row += 1
+        # --- Right column: Ek Kişi sections ---
+        right = ttk.Frame(self._form)
+        right.grid(row=2, column=1, sticky="nsew")
+        right.columnconfigure(1, weight=1)
+        row_right = 0
 
-        ttk.Separator(self, orient="horizontal") \
-            .grid(row=row, column=0, columnspan=4, sticky="ew", **pad)
-        row += 1
+        ttk.Label(right, text="Ek Kişi 1").grid(row=row_right, column=0, columnspan=2, sticky="w", pady=first_field_gap, padx=pad["padx"])
+        row_right += 1
+        ttk.Label(right, text="Adı Soyadı").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c1_name, width=30).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
+        )
+        row_right += 1
+        ttk.Label(right, text="Telefon").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c1_phone, width=25).grid(
+            row=row_right, column=1, sticky="w", pady=field_gap, padx=pad["padx"]
+        )
+        row_right += 1
+        ttk.Label(right, text="Ev Adresi").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c1_home, width=60).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
+        )
+        row_right += 1
+        ttk.Label(right, text="İş Adresi").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c1_work, width=60).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
+        )
+        row_right += 1
 
-        # --- Ek Kişi 2 ---
-        ttk.Label(self, text="Ek Kişi 2").grid(row=row, column=0, sticky="w", **pad)
-        row += 1
-        ttk.Label(self, text="Adı Soyadı").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_name, width=30).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        ttk.Label(right, text="Ek Kişi 2").grid(row=row_right, column=0, columnspan=2, sticky="w", pady=first_field_gap, padx=pad["padx"])
+        row_right += 1
+        ttk.Label(right, text="Adı Soyadı").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c2_name, width=30).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
-        ttk.Label(self, text="Telefon").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_phone, width=25).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        row_right += 1
+        ttk.Label(right, text="Telefon").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c2_phone, width=25).grid(
+            row=row_right, column=1, sticky="w", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
-        ttk.Label(self, text="Ev Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_home, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        row_right += 1
+        ttk.Label(right, text="Ev Adresi").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c2_home, width=60).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
-        ttk.Label(self, text="İş Adresi").grid(row=row, column=0, sticky="e", **pad)
-        ttk.Entry(self, textvariable=self.c2_work, width=60).grid(
-            row=row, column=1, columnspan=3, sticky="w", **pad
+        row_right += 1
+        ttk.Label(right, text="İş Adresi").grid(row=row_right, column=0, sticky="e", pady=field_gap, padx=pad["padx"])
+        ttk.Entry(right, textvariable=self.c2_work, width=60).grid(
+            row=row_right, column=1, sticky="ew", pady=field_gap, padx=pad["padx"]
         )
-        row += 1
+
+        # Spacer to push buttons down when there is extra room
+        ttk.Frame(self._form).grid(row=3, column=0, columnspan=2, sticky="nsew")
 
         # --- Action buttons ---
-        ttk.Button(self, text="Kaydet (F10)", command=self.save).grid(
-            row=row, column=2, sticky="e", **pad
-        )
-        ttk.Button(self, text="Vazgeç", command=self.cancel).grid(
-            row=row, column=3, sticky="w", **pad
-        )
-        self.bind_all("<F10>", lambda e: self.save())
+        buttons = ttk.Frame(self._form)
+        buttons.grid(row=4, column=0, columnspan=2, sticky="se", padx=pad["padx"], pady=(16, 8))
+        self.save_btn = ttk.Button(buttons, text="Kaydet (F10)", command=self.save, style="Form.TButton", takefocus=True)
+        self.save_btn.grid(row=0, column=0, sticky="e", padx=(0, 8))
+        self.cancel_btn = ttk.Button(buttons, text="Vazgeç", command=self.cancel, style="Form.TButton", takefocus=True)
+        self.cancel_btn.grid(row=0, column=1, sticky="w")
+        for btn in (self.save_btn, self.cancel_btn):
+            btn.bind("<FocusIn>", lambda e, b=btn: b.configure(style="FormFocus.TButton"))
+            btn.bind("<FocusOut>", lambda e, b=btn: b.configure(style="Form.TButton"))
+            self._activate_on_enter(btn)
+        self.bind_all("<F10>", self._on_f10, add="+")
 
         # Initialize as “new customer”
         self._new_customer_defaults()
+
+    def _set_notes_text(self, value: str) -> None:
+        """Sync the notes text widget and backing var."""
+        self.var_notes.set(value or "")
+        self._notes_text.delete("1.0", "end")
+        if value:
+            self._notes_text.insert("1.0", value)
+
+    def _get_notes_text(self) -> str:
+        """Return trimmed notes from text widget and update backing var."""
+        val = self._notes_text.get("1.0", "end").strip()
+        self.var_notes.set(val)
+        return val
+
+    def _focus_next_widget(self, widget: tk.Widget, reverse: bool = False) -> str:
+        """Move focus forward/backward instead of inserting tabs in text widgets."""
+        next_widget = widget.tk_focusPrev() if reverse else widget.tk_focusNext()
+        if next_widget:
+            next_widget.focus_set()
+        return "break"
+
+    def _activate_on_enter(self, button: ttk.Button) -> None:
+        """Bind Enter to invoke button (space already works by default)."""
+        def _activate(_: tk.Event) -> str:
+            button.invoke()
+            return "break"
+        button.bind("<Return>", _activate, add="+")
 
     def _new_customer_defaults(self) -> None:
         """Set the next free ID and today’s date as defaults."""
@@ -166,6 +257,7 @@ class AddCustomerFrame(ttk.Frame):
 
         self.var_id.set(self._default_id)
         self.var_reg_date.set(self._default_date)
+        self._set_notes_text("")
 
     def load_customer(self) -> None:
         """Load an existing customer when you tab away from Müşteri No."""
@@ -190,7 +282,7 @@ class AddCustomerFrame(ttk.Frame):
             self.var_phone.set(cust.phone or "")
             self.var_address.set(cust.address or "")
             self.var_work_address.set(cust.work_address or "")
-            self.var_notes.set(cust.notes or "")
+            self._set_notes_text(cust.notes or "")
 
             # Load up to two existing contacts
             contacts = (
@@ -237,7 +329,7 @@ class AddCustomerFrame(ttk.Frame):
                 cust.phone          = self.var_phone.get().strip()
                 cust.address        = self.var_address.get().strip()
                 cust.work_address   = self.var_work_address.get().strip()
-                cust.notes          = self.var_notes.get().strip()
+                cust.notes          = self._get_notes_text()
             else:
                 # Create new record
                 today = date.today()
@@ -247,7 +339,7 @@ class AddCustomerFrame(ttk.Frame):
                     phone=self.var_phone.get().strip(),
                     address=self.var_address.get().strip(),
                     work_address=self.var_work_address.get().strip(),
-                    notes=self.var_notes.get().strip(),
+                    notes=self._get_notes_text(),
                     registration_date=today,
                 )
                 s.add(cust)
@@ -290,9 +382,22 @@ class AddCustomerFrame(ttk.Frame):
             self.c2_name, self.c2_phone, self.c2_home, self.c2_work,
         ]:
             var.set("")
+        self._set_notes_text("")
         self._new_customer_defaults()
         
     def cancel(self) -> None:
         """Cancel and return to customer search tab."""
         self.clear_all()
         self.master.select(self.search_frame)
+
+    def _on_mousewheel(self, event: tk.Event) -> None:
+        """Scroll the form when the mouse wheel moves."""
+        delta = -1 * int(event.delta / 120)
+        self._canvas.yview_scroll(delta, "units")
+
+    def _on_f10(self, event: tk.Event) -> str | None:
+        """Fire save only when this tab is active."""
+        if self.master.select() != str(self):
+            return None
+        self.save()
+        return "break"
