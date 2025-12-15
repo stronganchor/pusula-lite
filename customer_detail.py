@@ -258,10 +258,10 @@ class CustomerDetailFrame(ttk.Frame):
         row += 1
 
         # – Installment report table (lower half, taller) –
-        rep_cols = ("month", "amount", "paid")
+        rep_cols = ("month", "due", "amount", "paid")
         self.report_tree = ttk.Treeview(self, columns=rep_cols, show="headings", height=10)
-        rep_headings = ("Ay", "Tutar", "Ödendi")
-        rep_widths   = (150,    100,     80)
+        rep_headings = ("Ay", "Vade Tarihi", "Tutar", "Ödendi")
+        rep_widths   = (120,        120,      120,     80)
         for col, txt, w in zip(rep_cols, rep_headings, rep_widths):
             self.report_tree.heading(col, text=txt)
             self.report_tree.column(col, width=w, anchor="center")
@@ -508,8 +508,7 @@ class CustomerDetailFrame(ttk.Frame):
             years = {this_year}
         vals = sorted(years)
         self.cmb_year["values"] = vals
-        default = this_year if this_year in vals else vals[-1]
-        self.report_year_var.set(str(default))
+        self.report_year_var.set(str(vals[0]))
 
 
     def load_report(self) -> None:
@@ -530,12 +529,15 @@ class CustomerDetailFrame(ttk.Frame):
             )
     
         # Group by month
-        grouped: dict[int, dict[str, decimal.Decimal | bool]] = {}
+        grouped: dict[int, dict[str, decimal.Decimal | bool | date]] = {}
         for due_date, amount, paid in rows:
             m = due_date.month
             if m not in grouped:
-                grouped[m] = {"total": decimal.Decimal("0.00"), "all_paid": True}
+                grouped[m] = {"total": decimal.Decimal("0.00"), "all_paid": True, "first_due": due_date}
             grouped[m]["total"] += amount
+            # keep earliest due date for the month
+            if due_date < grouped[m]["first_due"]:
+                grouped[m]["first_due"] = due_date
             if not paid:
                 grouped[m]["all_paid"] = False
     
@@ -555,9 +557,11 @@ class CustomerDetailFrame(ttk.Frame):
         for m in sorted(grouped):
             total = grouped[m]["total"]
             paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
+            first_due = grouped[m].get("first_due")
+            due_str = first_due.strftime("%Y-%m-%d") if first_due else ""
             self.report_tree.insert(
                 "", "end",
-                values=(TURKISH_MONTHS[m], format_currency(total), paid_str)
+                values=(TURKISH_MONTHS[m], due_str, format_currency(total), paid_str)
             )
     
         # Determine earliest unpaid month (if any)
@@ -601,7 +605,7 @@ class CustomerDetailFrame(ttk.Frame):
             return
 
         item = self.report_tree.item(selection[0])
-        paid_status = item["values"][2]  # "Evet" or "Hayır"
+        paid_status = item["values"][3]  # "Evet" or "Hayır"
         is_paid = paid_status == "Evet"
 
         self.btn_undo_payment.config(state="normal" if is_paid else "disabled")
