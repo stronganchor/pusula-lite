@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox, simpledialog
 import calendar
 from datetime import date, datetime
@@ -266,6 +267,10 @@ class CustomerDetailFrame(ttk.Frame):
             self.report_tree.heading(col, text=txt)
             self.report_tree.column(col, width=w, anchor="center")
         self.report_tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
+        base_font = tkfont.nametofont("TkDefaultFont")
+        late_font = base_font.copy()
+        late_font.configure(weight="bold")
+        self.report_tree.tag_configure("late", foreground="#e67e22", font=late_font)
         self.rowconfigure(row, weight=1)
 
         # Bind selection for payment actions
@@ -552,6 +557,8 @@ class CustomerDetailFrame(ttk.Frame):
     
         self.var_total_debt.set(format_currency(total_debt))
     
+        today = date.today()
+
         # Populate report tree
         self.report_tree.delete(*self.report_tree.get_children())
         for m in sorted(grouped):
@@ -559,9 +566,13 @@ class CustomerDetailFrame(ttk.Frame):
             paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
             first_due = grouped[m].get("first_due")
             due_str = first_due.strftime("%Y-%m-%d") if first_due else ""
+            tags = ()
+            if first_due and first_due < today and not grouped[m]["all_paid"]:
+                tags = ("late",)
             self.report_tree.insert(
                 "", "end",
-                values=(TURKISH_MONTHS[m], due_str, format_currency(total), paid_str)
+                values=(TURKISH_MONTHS[m], due_str, format_currency(total), paid_str),
+                tags=tags,
             )
     
         # Determine earliest unpaid month (if any)
@@ -654,13 +665,13 @@ class CustomerDetailFrame(ttk.Frame):
         month_name = item["values"][0]
 
         # Confirm undo
-        response = messagebox.askyesno(
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
             "Ödemeyi Geri Al",
-            f"{month_name} ayı için yapılan ödemeyi geri almak istediğinizden emin misiniz?",
-            icon="warning"
+            f"{month_name} ayı için yapılan ödemeyi geri almak istediğinizden emin misiniz?"
         )
-
-        if not response:
+        self.wait_window(dialog)
+        if not dialog.result:
             return
 
         m = TURKISH_MONTHS.index(month_name)
@@ -708,7 +719,7 @@ class CustomerDetailFrame(ttk.Frame):
         if not selection:
             return
         item = self.report_tree.item(selection[0])
-        month_name, _, paid_status = item["values"]
+        month_name, _, _, paid_status = item["values"]
         if paid_status != "Evet":
             messagebox.showinfo("Bilgi", "Ödenmiş bir ay seçiniz.")
             return

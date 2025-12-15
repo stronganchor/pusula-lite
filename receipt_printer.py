@@ -4,7 +4,7 @@
 from __future__ import annotations
 import tempfile
 import webbrowser
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from pathlib import Path
 
@@ -500,16 +500,25 @@ def generate_payment_receipt_html(
                 <th>Taksit Tarihi</th>
                 <th>Tutar</th>
                 <th>Satış No</th>
+                <th>Durum</th>
             </tr>
         </thead>
         <tbody>"""
 
+    any_late = False
+    today = date.today()
+
     for due_date, amount, sale_id in rows:
+        due_dt = due_date if isinstance(due_date, date) else due_date.date()
+        status = "Geç Ödeme" if due_dt < today else "Vadesinde"
+        if status == "Geç Ödeme":
+            any_late = True
         html += f"""
             <tr>
-                <td>{due_date.strftime("%d/%m/%Y")}</td>
+                <td>{due_dt.strftime("%d/%m/%Y")}</td>
                 <td>{format_currency(amount)} TL</td>
                 <td>{sale_id}</td>
+                <td>{status}</td>
             </tr>"""
 
     html += f"""
@@ -517,6 +526,7 @@ def generate_payment_receipt_html(
     </table>
 
     <div class="total">Toplam Ödenen: {format_currency(total_paid)} TL</div>
+    {"<div class='total' style='color:#c0392b;font-size:10pt;'>Bu ödeme vadesinden sonra yapılmıştır.</div>" if any_late else ""}
 
     <div class="footer">
         <div class="thank-you">Mağazamızdan yapmış olduğunuz ödeme için teşekkür ederiz</div>
