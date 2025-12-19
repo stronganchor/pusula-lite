@@ -11,6 +11,7 @@ from tkinter import ttk, messagebox
 import db
 import app_state
 import updater
+from date_utils import format_date_tr
 
 class CustomerSearchFrame(ttk.Frame):
     def __init__(
@@ -125,7 +126,7 @@ class CustomerSearchFrame(ttk.Frame):
 
         self.tree.delete(*self.tree.get_children())
         for r in rows:
-            reg_str = r.registration_date.strftime("%Y-%m-%d")
+            reg_str = format_date_tr(r.registration_date)
             self.tree.insert(
                 "", "end",
                 values=(r.id, r.name, r.phone or "", reg_str, r.address or "")
@@ -162,7 +163,7 @@ class CustomerSearchFrame(ttk.Frame):
 
         self.tree.delete(*self.tree.get_children())
         for r in rows:
-            reg_str = r.registration_date.strftime("%Y-%m-%d")
+            reg_str = format_date_tr(r.registration_date)
             self.tree.insert(
                 "", "end",
                 values=(r.id, r.name, r.phone or "", reg_str, r.address or "")

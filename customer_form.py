@@ -11,6 +11,7 @@ from datetime import date
 from sqlalchemy import func
 
 import db
+from date_utils import format_date_tr, today_str_tr
 
 
 class AddCustomerFrame(ttk.Frame):
@@ -253,7 +254,7 @@ class AddCustomerFrame(ttk.Frame):
         with db.session() as s:
             last = s.query(func.max(db.Customer.id)).scalar() or 0
         self._default_id   = str(last + 1)
-        self._default_date = date.today().strftime("%Y-%m-%d")
+        self._default_date = today_str_tr()
 
         self.var_id.set(self._default_id)
         self.var_reg_date.set(self._default_date)
@@ -277,7 +278,7 @@ class AddCustomerFrame(ttk.Frame):
                 return
 
             # Populate header + main fields
-            self.var_reg_date.set(cust.registration_date.strftime("%Y-%m-%d"))
+            self.var_reg_date.set(format_date_tr(cust.registration_date))
             self.var_name.set(cust.name or "")
             self.var_phone.set(cust.phone or "")
             self.var_address.set(cust.address or "")
@@ -346,7 +347,7 @@ class AddCustomerFrame(ttk.Frame):
                 s.flush()
                 cid = cust.id
                 self.var_id.set(str(cid))
-                self.var_reg_date.set(cust.registration_date.strftime("%Y-%m-%d"))
+                self.var_reg_date.set(format_date_tr(cust.registration_date))
 
             # Replace both contacts
             s.query(db.Contact).filter_by(customer_id=cid).delete()

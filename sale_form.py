@@ -14,6 +14,7 @@ import updater
 import db
 import app_state
 import receipt_printer
+from date_utils import format_date_tr, parse_date_tr, today_str_tr
 
 class SaleFrame(ttk.Frame):
     """Embedded form for recording a new sale with equal instalments."""
@@ -24,7 +25,7 @@ class SaleFrame(ttk.Frame):
         # State variables
         self.var_customer_id   = tk.StringVar()
         self.var_customer_name = tk.StringVar(value="(seçilmedi)")
-        self.var_date          = tk.StringVar(value=dt.date.today().isoformat())
+        self.var_date          = tk.StringVar(value=today_str_tr())
         self.var_total         = tk.StringVar()
         self.var_down          = tk.StringVar(value="0")
         self.var_n_inst        = tk.StringVar(value="1")
@@ -65,7 +66,7 @@ class SaleFrame(ttk.Frame):
         row += 1
 
         # Date
-        ttk.Label(left, text="Tarih (YYYY-MM-DD)").grid(row=row, column=0, sticky="e", **pad)
+        ttk.Label(left, text="Tarih (GG-AA-YYYY)").grid(row=row, column=0, sticky="e", **pad)
         ent_date = ttk.Entry(left, textvariable=self.var_date, width=15)
         ent_date.grid(row=row, column=1, sticky="w", **pad)
         ent_date.bind("<KeyRelease>", lambda e: self.update_preview())
@@ -178,7 +179,7 @@ class SaleFrame(ttk.Frame):
             total = Decimal(self.var_total.get())
             down = Decimal(self.var_down.get())
             n_inst = int(self.var_n_inst.get())
-            sale_date = dt.date.fromisoformat(self.var_date.get())
+            sale_date = parse_date_tr(self.var_date.get())
             due_day = int(self.var_due_day.get())
 
             if (
@@ -195,7 +196,7 @@ class SaleFrame(ttk.Frame):
             last_date = self._compute_due_date(sale_date, due_day, n_inst)
 
             self.var_preview_amount.set(f"{inst_amount:,.2f} ₺")
-            self.var_preview_last_date.set(last_date.strftime("%Y-%m-%d"))
+            self.var_preview_last_date.set(format_date_tr(last_date))
 
         except (InvalidOperation, ValueError):
             self.var_preview_amount.set("—")
@@ -223,9 +224,9 @@ class SaleFrame(ttk.Frame):
             return
     
         try:
-            sale_date = dt.date.fromisoformat(self.var_date.get())
+            sale_date = parse_date_tr(self.var_date.get())
         except ValueError:
-            messagebox.showwarning("Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır.")
+            messagebox.showwarning("Hatalı Tarih", "Tarih formatı GG-AA-YYYY olmalıdır.")
             return
     
         try:
@@ -289,7 +290,7 @@ class SaleFrame(ttk.Frame):
 
     def clear_all(self) -> None:
         """Reset sale-specific fields (keep customer)."""
-        self.var_date.set(dt.date.today().isoformat())
+        self.var_date.set(today_str_tr())
         self.var_total.set("")
         self.var_down.set("0")
         self.var_n_inst.set("1")

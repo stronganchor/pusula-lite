@@ -11,6 +11,7 @@ import decimal
 from sqlalchemy import func
 
 import db
+from date_utils import format_date_tr, parse_date_tr, today_str_tr
 
 
 def format_currency(amount: decimal.Decimal) -> str:
@@ -28,8 +29,8 @@ class DailySalesReportFrame(ttk.Frame):
         super().__init__(master, padding=8)
 
         # Variables
-        self.var_start_date = tk.StringVar(value=date.today().isoformat())
-        self.var_end_date = tk.StringVar(value=date.today().isoformat())
+        self.var_start_date = tk.StringVar(value=today_str_tr())
+        self.var_end_date = tk.StringVar(value=today_str_tr())
         self.var_total_sales = tk.StringVar(value="0,00₺")
         self.var_num_sales = tk.StringVar(value="0")
 
@@ -111,7 +112,7 @@ class DailySalesReportFrame(ttk.Frame):
 
     def set_today(self) -> None:
         """Set date range to today."""
-        today = date.today().isoformat()
+        today = today_str_tr()
         self.var_start_date.set(today)
         self.var_end_date.set(today)
         self.load_report()
@@ -121,8 +122,8 @@ class DailySalesReportFrame(ttk.Frame):
         today = date.today()
         start = today - timedelta(days=today.weekday())  # Monday
         end = start + timedelta(days=6)  # Sunday
-        self.var_start_date.set(start.isoformat())
-        self.var_end_date.set(end.isoformat())
+        self.var_start_date.set(format_date_tr(start))
+        self.var_end_date.set(format_date_tr(end))
         self.load_report()
 
     def set_this_month(self) -> None:
@@ -133,15 +134,15 @@ class DailySalesReportFrame(ttk.Frame):
             end = today.replace(day=31)
         else:
             end = (today.replace(month=today.month + 1, day=1) - timedelta(days=1))
-        self.var_start_date.set(start.isoformat())
-        self.var_end_date.set(end.isoformat())
+        self.var_start_date.set(format_date_tr(start))
+        self.var_end_date.set(format_date_tr(end))
         self.load_report()
 
     def load_report(self) -> None:
         """Load sales for the selected date range."""
         try:
-            start = date.fromisoformat(self.var_start_date.get())
-            end = date.fromisoformat(self.var_end_date.get())
+            start = parse_date_tr(self.var_start_date.get())
+            end = parse_date_tr(self.var_end_date.get())
         except ValueError:
             self.var_total_sales.set("0,00₺")
             self.var_num_sales.set("0")
@@ -177,7 +178,7 @@ class DailySalesReportFrame(ttk.Frame):
                 values=(
                     sale_id,
                     cust_name,
-                    sale_date.strftime("%Y-%m-%d"),
+                    format_date_tr(sale_date),
                     format_currency(total),
                     desc or ""
                 ),

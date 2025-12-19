@@ -10,6 +10,7 @@ from pathlib import Path
 
 import db
 from sqlalchemy import func
+from date_utils import format_date_tr
 
 TURKISH_MONTHS = [
     "", "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
@@ -45,7 +46,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
 
         # Get current date/time for receipt
         now = datetime.now()
-        tarih = now.strftime("%d/%m/%Y")
+        tarih = format_date_tr(now)
         saat = now.strftime("%H:%M")
 
         # Build HTML
@@ -230,7 +231,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
 
     <div class="sale-details">
         <div class="sale-row">
-            <strong>{sale.date.strftime("%d/%m/%Y")}</strong> Tarihinde
+            <strong>{format_date_tr(sale.date)}</strong> Tarihinde
             <span class="amount">{format_currency(sale.total)} TL</span> Alışveriş Yapılıp
         </div>
         <div class="sale-row">
@@ -258,7 +259,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
 """
             if geciken:
                 for inst in geciken:
-                    html += f'                <div class="installment-item">{inst.due_date.strftime("%d/%m/%Y")} - {format_currency(inst.amount)} TL</div>\n'
+                    html += f'                <div class="installment-item">{format_date_tr(inst.due_date)} - {format_currency(inst.amount)} TL</div>\n'
             else:
                 html += '                <div class="installment-item">Yok</div>\n'
 
@@ -268,7 +269,7 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
 """
             if taksitler:
                 for inst in taksitler:
-                    html += f'                <div class="installment-item">{inst.due_date.strftime("%d/%m/%Y")} - {format_currency(inst.amount)} TL</div>\n'
+                    html += f'                <div class="installment-item">{format_date_tr(inst.due_date)} - {format_currency(inst.amount)} TL</div>\n'
             else:
                 html += '                <div class="installment-item">Yok</div>\n'
 
@@ -376,7 +377,7 @@ def generate_payment_receipt_html(
     customer_id, customer_name, customer_address = customer_row
     total_paid = sum(amount for _, amount, _ in rows)
     now = datetime.now()
-    tarih = now.strftime("%d/%m/%Y")
+    tarih = format_date_tr(now)
     saat = now.strftime("%H:%M")
 
     html = f"""<!DOCTYPE html>
@@ -515,7 +516,7 @@ def generate_payment_receipt_html(
             any_late = True
         html += f"""
             <tr>
-                <td>{due_dt.strftime("%d/%m/%Y")}</td>
+                <td>{format_date_tr(due_dt)}</td>
                 <td>{format_currency(amount)} TL</td>
                 <td>{sale_id}</td>
                 <td>{status}</td>

@@ -17,6 +17,7 @@ import db
 import app_state
 import updater
 import receipt_printer
+from date_utils import format_date_tr, parse_date_tr
 
 # Turkish month names, index 1–12
 TURKISH_MONTHS = [
@@ -60,8 +61,8 @@ class SaleEditDialog(tk.Toplevel):
         self.rowconfigure(2, weight=1)
 
         # Date
-        ttk.Label(self, text="Tarih (YYYY-MM-DD):").grid(row=0, column=0, sticky="e", **pad)
-        self.var_date = tk.StringVar(value=current_date.strftime("%Y-%m-%d"))
+        ttk.Label(self, text="Tarih (GG-AA-YYYY):").grid(row=0, column=0, sticky="e", **pad)
+        self.var_date = tk.StringVar(value=format_date_tr(current_date))
         ttk.Entry(self, textvariable=self.var_date, width=15).grid(row=0, column=1, sticky="w", **pad)
 
         # Total
@@ -99,9 +100,9 @@ class SaleEditDialog(tk.Toplevel):
     def save(self):
         """Validate and save changes."""
         try:
-            new_date = datetime.strptime(self.var_date.get().strip(), "%Y-%m-%d").date()
+            new_date = parse_date_tr(self.var_date.get())
         except ValueError:
-            messagebox.showwarning("Hatalı Tarih", "Tarih formatı YYYY-MM-DD olmalıdır.", parent=self)
+            messagebox.showwarning("Hatalı Tarih", "Tarih formatı GG-AA-YYYY olmalıdır.", parent=self)
             return
 
         try:
@@ -381,7 +382,7 @@ class CustomerDetailFrame(ttk.Frame):
                 "end",
                 values=(
                     sid,
-                    dt_.strftime("%Y-%m-%d"),
+                    format_date_tr(dt_),
                     format_currency(tot),
                     self._preview_description(desc)
                 ),
@@ -568,7 +569,7 @@ class CustomerDetailFrame(ttk.Frame):
             total = grouped[m]["total"]
             paid_str = "Evet" if grouped[m]["all_paid"] else "Hayır"
             first_due = grouped[m].get("first_due")
-            due_str = first_due.strftime("%Y-%m-%d") if first_due else ""
+            due_str = format_date_tr(first_due) if first_due else ""
             tags = ()
             if first_due and first_due < today and not grouped[m]["all_paid"]:
                 tags = ("late",)
