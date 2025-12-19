@@ -10,6 +10,7 @@ from tkinter import ttk, messagebox
 
 import db
 import app_state
+import updater
 
 class CustomerSearchFrame(ttk.Frame):
     def __init__(
@@ -60,7 +61,7 @@ class CustomerSearchFrame(ttk.Frame):
         # --- Bottom: Navigation buttons ---
         nav = ttk.Frame(self)
         nav.grid(row=2, column=0, columnspan=2, sticky="ew", pady=8)
-        for idx in range(3):
+        for idx in range(4):
             nav.columnconfigure(idx, weight=1)
 
         self.btn_edit = ttk.Button(
@@ -86,6 +87,14 @@ class CustomerSearchFrame(ttk.Frame):
             state="disabled"
         )
         self.btn_detail.grid(row=0, column=2, sticky="ew", padx=4)
+
+        self.btn_delete = ttk.Button(
+            nav,
+            text="Müşteri Sil",
+            command=self.delete_customer,
+            state="disabled"
+        )
+        self.btn_delete.grid(row=0, column=3, sticky="ew", padx=4)
 
         # Now that buttons exist, load initial data
         self._load_all()
@@ -164,7 +173,7 @@ class CustomerSearchFrame(ttk.Frame):
         """Enable nav buttons only if a customer row is selected."""
         has_sel = bool(self.tree.selection())
         state = "normal" if has_sel else "disabled"
-        for btn in (self.btn_edit, self.btn_sale, self.btn_detail):
+        for btn in (self.btn_edit, self.btn_sale, self.btn_detail, self.btn_delete):
             btn.config(state=state)
 
     def _get_selected_cid(self) -> int | None:
@@ -209,3 +218,53 @@ class CustomerSearchFrame(ttk.Frame):
         app_state.last_customer_id = cid
         self.detail_frame.load_customer(cid)
         self.notebook.select(self.detail_frame)
+
+    def delete_customer(self) -> None:
+        """Delete the selected customer after double confirmation."""
+        cid = self._get_selected_cid()
+        if cid is None:
+            return
+
+        with db.session() as s:
+            cust = s.get(db.Customer, cid)
+            if not cust:
+                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
+                self._load_all()
+                return
+            name = cust.name or ""
+
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
+            "Müşteri Sil",
+            f"{cid} - {name} müşterisini silmek istediğinize emin misiniz?"
+        )
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
+            "Müşteri Sil",
+            "Bu işlem müşteriye ait tüm satış, taksit ve ödeme kayıtlarını kalıcı olarak silecek.\n\nSilmek istediğinizden emin misiniz?"
+        )
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        with db.session() as s:
+            cust = s.get(db.Customer, cid)
+            if cust:
+                s.delete(cust)
+
+        if app_state.last_customer_id == cid:
+            app_state.last_customer_id = None
+
+        if getattr(self, "detail_frame", None):
+            try:
+                self.detail_frame.var_id.set("")
+                self.detail_frame.load_customer()
+            except Exception:
+                pass
+
+        self._load_all()
+        messagebox.showinfo("Silindi", "Müşteri ve ilişkili tüm kayıtlar silindi.")

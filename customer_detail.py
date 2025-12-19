@@ -484,20 +484,23 @@ class CustomerDetailFrame(ttk.Frame):
         sale_id = item["values"][0]
 
         # Confirm deletion
-        response = messagebox.askyesno(
+        dialog = updater.ConfirmDialog(
+            self.winfo_toplevel(),
             "Satışı Sil",
-            "Bu satışı ve tüm taksitlerini silmek istediğinizden emin misiniz?",
-            icon="warning"
+            "Bu satışı ve tüm taksitlerini silmek istediğinizden emin misiniz?"
         )
+        self.wait_window(dialog)
 
-        if response:
-            with db.session() as s:
-                sale = s.get(db.Sale, sale_id)
-                if sale:
-                    s.delete(sale)
+        if not dialog.result:
+            return
 
-            messagebox.showinfo("Başarılı", "Satış silindi.")
-            self.load_customer()
+        with db.session() as s:
+            sale = s.get(db.Sale, sale_id)
+            if sale:
+                s.delete(sale)
+
+        messagebox.showinfo("Başarılı", "Satış silindi.")
+        self.load_customer()
 
 
     def populate_years(self, cust_id: int) -> None:
