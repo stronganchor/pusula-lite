@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import date, timedelta
 import decimal
 
-from sqlalchemy import func
-
-import db
+import remote_api
+from customer_detail import SaleEditDialog
 from date_utils import format_date_tr, parse_date_tr, today_str_tr
 
 
@@ -104,8 +103,25 @@ class DailySalesReportFrame(ttk.Frame):
         self.tree.grid(row=row, column=0, columnspan=4, sticky="nsew", **pad)
         sb.grid(row=row, column=4, sticky="ns")
 
+        # Enable double-click edit and track selection for the button state
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.update_edit_button())
+        self.tree.bind("<Double-1>", lambda e: self.edit_selected_sale())
+
         self.columnconfigure(0, weight=1)
         self.rowconfigure(row, weight=1)
+
+        row += 1
+
+        # Actions
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=row, column=0, columnspan=4, sticky="e", padx=8, pady=(0, 4))
+        self.btn_edit_sale = ttk.Button(
+            btn_frame,
+            text="Satışı Düzelt",
+            command=self.edit_selected_sale,
+            state="disabled",
+        )
+        self.btn_edit_sale.pack(side="right", padx=4)
 
         # Load initial report
         self.load_report()
@@ -149,37 +165,137 @@ class DailySalesReportFrame(ttk.Frame):
             self.tree.delete(*self.tree.get_children())
             return
 
-        with db.session() as s:
-            sales = (
-                s.query(
-                    db.Sale.id,
-                    db.Customer.name,
-                    db.Sale.date,
-                    db.Sale.total,
-                    db.Sale.description
-                )
-                .join(db.Customer)
-                .filter(db.Sale.date >= start, db.Sale.date <= end)
-                .order_by(db.Sale.date.desc(), db.Sale.id.desc())
-                .all()
-            )
+        try:
+            sales = remote_api.list_sales(start=start.isoformat(), end=end.isoformat())
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            sales = []
 
         # Update summary
-        total_amount = sum(s.total for s in sales)
+        total_amount = sum(decimal.Decimal(str(s.get("total", "0") or "0")) for s in sales)
         self.var_total_sales.set(format_currency(total_amount))
         self.var_num_sales.set(str(len(sales)))
 
         # Populate tree
         self.tree.delete(*self.tree.get_children())
-        for sale_id, cust_name, sale_date, total, desc in sales:
+        for sale in sales:
+            sale_id = sale.get("id")
+            cust_name = sale.get("customer_name", "")
+            sale_date = sale.get("date")
+            try:
+                sale_date_obj = date.fromisoformat(sale_date) if sale_date else None
+            except Exception:
+                sale_date_obj = None
+            total = decimal.Decimal(str(sale.get("total", "0") or "0"))
+            desc = sale.get("description")
             self.tree.insert(
                 "",
                 "end",
                 values=(
                     sale_id,
                     cust_name,
-                    format_date_tr(sale_date),
+                    format_date_tr(sale_date_obj),
                     format_currency(total),
                     desc or ""
                 ),
             )
+
+        self.update_edit_button()
+
+    def update_edit_button(self) -> None:
+        """Enable/disable the edit button based on row selection."""
+        state = "normal" if self.tree.selection() else "disabled"
+        self.btn_edit_sale.config(state=state)
+
+    def _select_sale_in_tree(self, sale_id: int) -> None:
+        """Re-select a sale row by id after reload to keep context."""
+        for item in self.tree.get_children():
+            vals = self.tree.item(item, "values")
+            if vals and int(vals[0]) == sale_id:
+                self.tree.selection_set(item)
+                self.tree.see(item)
+                break
+        self.update_edit_button()
+
+    def edit_selected_sale(self) -> None:
+        """Open the Satışı Düzelt dialog for the selected sale."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        item = self.tree.item(selection[0])
+        sale_id = item["values"][0]
+
+        # Fetch current sale data
+        try:
+            remote_api.acquire_lock("sale", int(sale_id), mode="write")
+        except remote_api.ApiError as e:
+            if e.status == 409:
+                messagebox.showinfo("Kilitli", "Bu satış başka bir cihaz tarafından düzenleniyor.")
+                return
+            messagebox.showerror("API Hatası", e.message)
+            return
+
+        sale = remote_api.get_sale(int(sale_id))
+        if not sale:
+            messagebox.showerror("Hata", "Satış bulunamadı.")
+            remote_api.release_lock("sale", int(sale_id))
+            return
+
+        current_date = date.fromisoformat(sale.get("date"))
+        current_total = decimal.Decimal(str(sale.get("total", "0") or "0"))
+        current_desc = sale.get("description") or ""
+
+        installments = sale.get("installments") or []
+        n_installments = len(installments)
+        old_inst_sum = sum(decimal.Decimal(str(inst.get("amount", "0") or "0")) for inst in installments)
+
+        # Open edit dialog (same as taksitli satış tab)
+        dialog = SaleEditDialog(self, sale_id, current_date, current_total, current_desc)
+        self.wait_window(dialog)
+
+        if not dialog.result:
+            remote_api.release_lock("sale", int(sale_id))
+            return
+
+        new_total = dialog.result["total"]
+
+        # Calculate down payment (original total - sum of installments)
+        down_payment = current_total - old_inst_sum
+
+        # Calculate new installment amount
+        if n_installments > 0:
+            remaining = new_total - down_payment
+            new_inst_amount = (remaining / n_installments).quantize(decimal.Decimal("0.01"))
+        else:
+            new_inst_amount = decimal.Decimal("0.00")
+
+        # Update sale and installments in database
+        try:
+            remote_api.save_sale(
+                {
+                    "id": sale_id,
+                    "date": dialog.result["date"].isoformat(),
+                    "total": float(new_total),
+                    "description": dialog.result["description"],
+                }
+            )
+            for inst in installments:
+                remote_api.save_installment(
+                    {
+                        "id": inst.get("id"),
+                        "sale_id": sale_id,
+                        "due_date": inst.get("due_date"),
+                        "amount": float(new_inst_amount),
+                        "paid": inst.get("paid", 0),
+                    }
+                )
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+        finally:
+            remote_api.release_lock("sale", int(sale_id))
+
+        messagebox.showinfo("Başarılı", "Satış güncellendi.")
+        self.load_report()
+        self._select_sale_in_tree(sale_id)

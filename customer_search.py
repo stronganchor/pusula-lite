@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from datetime import datetime
 
-import db
 import app_state
 import updater
+import remote_api
 from date_utils import format_date_tr
 
 class CustomerSearchFrame(ttk.Frame):
@@ -32,11 +33,35 @@ class CustomerSearchFrame(ttk.Frame):
         # Top: search bar…
         frm = ttk.Frame(self)
         frm.grid(row=0, column=0, sticky="ew", pady=4)
-        frm.columnconfigure(1, weight=1)
-        ttk.Label(frm, text="Ara (isim/telefon/adres):").grid(row=0, column=0)
-        self.search_var = tk.StringVar()
-        ttk.Entry(frm, textvariable=self.search_var).grid(row=0, column=1, sticky="ew")
-        self.search_var.trace_add("write", self._on_filter)
+        # Give adres more space; keep müşteri no compact
+        frm.columnconfigure(1, weight=1)  # müşteri no
+        frm.columnconfigure(3, weight=2)  # isim
+        frm.columnconfigure(5, weight=2)  # telefon
+        frm.columnconfigure(7, weight=3)  # adres
+
+        ttk.Label(frm, text="Müşteri No:").grid(row=0, column=0, padx=(0, 6))
+        self.search_id_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.search_id_var, width=10).grid(row=0, column=1, sticky="ew", padx=(0, 12))
+
+        ttk.Label(frm, text="İsim:").grid(row=0, column=2, padx=(0, 6))
+        self.search_name_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.search_name_var).grid(row=0, column=3, sticky="ew", padx=(0, 12))
+
+        ttk.Label(frm, text="Telefon:").grid(row=0, column=4, padx=(0, 6))
+        self.search_phone_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.search_phone_var).grid(row=0, column=5, sticky="ew", padx=(0, 12))
+
+        ttk.Label(frm, text="Adres:").grid(row=0, column=6, padx=(0, 6))
+        self.search_address_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.search_address_var, width=30).grid(row=0, column=7, sticky="ew")
+
+        for var in (
+            self.search_id_var,
+            self.search_name_var,
+            self.search_phone_var,
+            self.search_address_var,
+        ):
+            var.trace_add("write", self._on_filter)
 
         # Treeview columns
         cols = ("id", "name", "phone", "reg_date", "address")
@@ -102,72 +127,43 @@ class CustomerSearchFrame(ttk.Frame):
 
     def _load_all(self) -> None:
         """Load all customers, newest first, with last-selected on top."""
-        with db.session() as s:
-            rows = (
-                s.query(
-                    db.Customer.id,
-                    db.Customer.name,
-                    db.Customer.phone,
-                    db.Customer.registration_date,
-                    db.Customer.address,
-                )
-                .order_by(
-                    db.Customer.registration_date.desc(),
-                    db.Customer.id.desc(),
-                )
-                .all()
-            )
+        try:
+            rows = remote_api.list_customers(limit=100)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            rows = []
 
         last = app_state.last_customer_id
-        if last is not None:
-            sel = [r for r in rows if r.id == last]
-            oth = [r for r in rows if r.id != last]
+        if last is not None and rows:
+            sel = [r for r in rows if int(r.get("id")) == last]
+            oth = [r for r in rows if int(r.get("id")) != last]
             rows = sel + oth
 
-        self.tree.delete(*self.tree.get_children())
-        for r in rows:
-            reg_str = format_date_tr(r.registration_date)
-            self.tree.insert(
-                "", "end",
-                values=(r.id, r.name, r.phone or "", reg_str, r.address or "")
-            )
+        self._render_rows(rows)
 
         # Enable/disable nav buttons
         self.update_nav_buttons()
 
     def _on_filter(self, *_args) -> None:
         """Filter customers by search term."""
-        term = self.search_var.get().lower().strip()
-        with db.session() as s:
-            q = s.query(
-                db.Customer.id,
-                db.Customer.name,
-                db.Customer.phone,
-                db.Customer.registration_date,
-                db.Customer.address,
+        id_term      = self.search_id_var.get().strip()
+        name_term    = self.search_name_var.get().strip()
+        phone_term   = self.search_phone_var.get().strip()
+        address_term = self.search_address_var.get().strip()
+        cid = int(id_term) if id_term.isdigit() else None
+        try:
+            rows = remote_api.list_customers(
+                cid=cid,
+                name=name_term or None,
+                phone=phone_term or None,
+                address=address_term or None,
+                limit=100,
             )
-            if term:
-                like = f"%{term}%"
-                q = q.filter(
-                    (db.Customer.name.ilike(like))
-                    | (db.Customer.phone.ilike(like))
-                    | (db.Customer.address.ilike(like))
-                )
-            rows = (
-                q.order_by(
-                    db.Customer.registration_date.desc(),
-                    db.Customer.id.desc(),
-                )
-                .all()
-            )
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            rows = []
 
-        self.tree.delete(*self.tree.get_children())
-        for r in rows:
-            reg_str = format_date_tr(r.registration_date)
-            self.tree.insert(
-                "", "end",
-                values=(r.id, r.name, r.phone or "", reg_str, r.address or "")
-            )
+        self._render_rows(rows)
         self.update_nav_buttons()
 
     def update_nav_buttons(self) -> None:
@@ -183,6 +179,28 @@ class CustomerSearchFrame(ttk.Frame):
         if not sel:
             return None
         return self.tree.item(sel)["values"][0]
+
+    def _render_rows(self, rows: list[dict]) -> None:
+        """Render customers into the treeview."""
+        self.tree.delete(*self.tree.get_children())
+        for r in rows:
+            reg_date = r.get("registration_date")
+            if isinstance(reg_date, str):
+                try:
+                    reg_date = datetime.fromisoformat(reg_date).date()
+                except ValueError:
+                    reg_date = None
+            reg_str = format_date_tr(reg_date) if reg_date else ""
+            self.tree.insert(
+                "", "end",
+                values=(
+                    r.get("id"),
+                    r.get("name", ""),
+                    r.get("phone", "") or "",
+                    reg_str,
+                    r.get("address", "") or ""
+                )
+            )
 
     def _load_detail(self, event=None) -> None:
         """Double-click or Enter: load into detail tab using exact ID."""
@@ -226,13 +244,16 @@ class CustomerSearchFrame(ttk.Frame):
         if cid is None:
             return
 
-        with db.session() as s:
-            cust = s.get(db.Customer, cid)
-            if not cust:
-                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
-                self._load_all()
-                return
-            name = cust.name or ""
+        try:
+            cust = remote_api.get_customer(cid)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+        if not cust:
+            messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
+            self._load_all()
+            return
+        name = cust.get("name", "")
 
         dialog = updater.ConfirmDialog(
             self.winfo_toplevel(),
@@ -252,10 +273,11 @@ class CustomerSearchFrame(ttk.Frame):
         if not dialog.result:
             return
 
-        with db.session() as s:
-            cust = s.get(db.Customer, cid)
-            if cust:
-                s.delete(cust)
+        try:
+            remote_api.delete_customer(cid)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
 
         if app_state.last_customer_id == cid:
             app_state.last_customer_id = None

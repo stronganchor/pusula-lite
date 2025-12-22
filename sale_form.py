@@ -11,9 +11,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import updater
 
-import db
 import app_state
 import receipt_printer
+import remote_api
 from date_utils import format_date_tr, parse_date_tr, today_str_tr
 
 class SaleFrame(ttk.Frame):
@@ -153,22 +153,27 @@ class SaleFrame(ttk.Frame):
         else:
             cid = app_state.last_customer_id
             if cid is None:
-                with db.session() as s:
-                    rec = s.query(db.Customer.id).order_by(db.Customer.id.desc()).first()
-                    cid = rec[0] if rec else None
+                try:
+                    customers = remote_api.list_customers(limit=1)
+                    cid = max(int(c.get("id")) for c in customers) if customers else None
+                except Exception:
+                    cid = None
 
         if cid is None:
             self.var_customer_name.set("(seçilmedi)")
             return
 
-        with db.session() as s:
-            cust = s.get(db.Customer, cid)
-            if not cust:
-                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
-                name = "(seçilmedi)"
-            else:
-                name = cust.name
-                app_state.last_customer_id = cid
+        try:
+            cust = remote_api.get_customer(cid)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+        if not cust:
+            messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
+            name = "(seçilmedi)"
+        else:
+            name = cust.get("name")
+            app_state.last_customer_id = cid
 
         self.var_customer_id.set(str(cid))
         self.var_customer_name.set(name)
@@ -217,8 +222,11 @@ class SaleFrame(ttk.Frame):
             return
         cust_id = int(raw)
     
-        with db.session() as s:
-            cust = s.get(db.Customer, cust_id)
+        try:
+            cust = remote_api.get_customer(cust_id)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
         if not cust:
             messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
             return
@@ -253,26 +261,30 @@ class SaleFrame(ttk.Frame):
         inst_amount = (remaining / n_inst).quantize(Decimal("0.01"))
     
         # Save sale
-        with db.session() as s:
-            desc = self.txt_description.get("1.0", tk.END).strip()
-            sale = db.Sale(
-                date=sale_date,
-                customer_id=cust_id,
-                total=total,
-                description=desc
+        desc = self.txt_description.get("1.0", tk.END).strip()
+        try:
+            sale_id = remote_api.save_sale(
+                {
+                    "customer_id": cust_id,
+                    "date": sale_date.isoformat(),
+                    "total": float(total),
+                    "description": desc,
+                }
             )
-            s.add(sale)
-            s.flush()
-            sale_id = sale.id
             for i in range(1, n_inst + 1):
                 due = self._compute_due_date(sale_date, due_day, i)
-                s.add(db.Installment(
-                    sale_id=sale.id,
-                    due_date=due,
-                    amount=inst_amount,
-                    paid=0
-                ))
-    
+                remote_api.save_installment(
+                    {
+                        "sale_id": sale_id,
+                        "due_date": due.isoformat(),
+                        "amount": float(inst_amount),
+                        "paid": 0,
+                    }
+                )
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+
         # Ask if user wants to print receipt
         dialog = updater.ConfirmDialog(
             self.winfo_toplevel(),

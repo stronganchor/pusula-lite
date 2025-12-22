@@ -11,9 +11,7 @@ import calendar
 from datetime import date, datetime
 import decimal
 
-from sqlalchemy import func
-
-import db
+import remote_api
 import app_state
 import updater
 import receipt_printer
@@ -321,8 +319,48 @@ class CustomerDetailFrame(ttk.Frame):
         )
         self.btn_print_payment.grid(row=0, column=6, padx=4, pady=2)
 
+        # Cache sales with installments per customer to reduce API calls
+        self._sales_cache: dict[int, list[dict]] = {}
+
         # Initial population
         self.load_customer()
+
+    def _latest_customer_id(self) -> int | None:
+        """Return the highest customer ID from API, or None."""
+        try:
+            customers = remote_api.list_customers(limit=1)
+            if not customers:
+                return None
+            return max(int(c.get("id")) for c in customers if c.get("id") is not None)
+        except Exception:
+            return None
+
+    def _installments_for_customer(self, cust_id: int) -> list[dict]:
+        """Fetch all installments for a customer across all sales."""
+        insts: list[dict] = []
+        try:
+            sales = self._sales_cache.get(cust_id)
+            if sales is None:
+                sales = remote_api.list_sales(customer_id=cust_id, with_installments=True)
+                self._sales_cache[cust_id] = sales
+            for sale in sales:
+                for inst in sale.get("installments", []):
+                    inst_copy = dict(inst)
+                    inst_copy["sale_id"] = sale.get("id")
+                    insts.append(inst_copy)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message, parent=self)
+        return insts
+
+    def _due_matches(self, inst: dict, year: int, month: int) -> bool:
+        due = inst.get("due_date")
+        if not due:
+            return False
+        try:
+            d = date.fromisoformat(due)
+        except Exception:
+            return False
+        return d.year == year and d.month == month
 
 
     def load_customer(self, event=None) -> None:
@@ -341,31 +379,25 @@ class CustomerDetailFrame(ttk.Frame):
             else:
                 cust_id = app_state.last_customer_id
                 if cust_id is None:
-                    with db.session() as s:
-                        rec = s.query(db.Customer.id) \
-                               .order_by(db.Customer.id.desc()) \
-                               .first()
-                        cust_id = rec[0] if rec else None
+                    cust_id = self._latest_customer_id()
 
         if cust_id is None:
             return
 
-        # Fetch customer + sales
-        with db.session() as s:
-            cust = s.get(db.Customer, cust_id)
-            if not cust:
-                messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
-                return
+        try:
+            cust = remote_api.get_customer(cust_id)
+            sales = remote_api.list_sales(customer_id=cust_id, with_installments=True)
+            self._sales_cache[cust_id] = sales
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+        if not cust:
+            messagebox.showwarning("Bulunamadı", f"{cust_id} numaralı müşteri yok.")
+            return
 
-            name  = cust.name or ""
-            phone = cust.phone or ""
-            addr  = cust.address or ""
-            sales = (
-                s.query(db.Sale.id, db.Sale.date, db.Sale.total, db.Sale.description)
-                 .filter_by(customer_id=cust_id)
-                 .order_by(db.Sale.date)
-                 .all()
-            )
+        name  = cust.get("name", "") or ""
+        phone = cust.get("phone", "") or ""
+        addr  = cust.get("address", "") or ""
 
         # Update header + state
         self.var_id.set(str(cust_id))
@@ -376,13 +408,21 @@ class CustomerDetailFrame(ttk.Frame):
 
         # Populate sales table
         self.tree.delete(*self.tree.get_children())
-        for sid, dt_, tot, desc in sales:
+        for sale in sorted(sales, key=lambda s: s.get("date") or ""):
+            sid = sale.get("id")
+            dt_ = sale.get("date")
+            try:
+                dt_val = date.fromisoformat(dt_) if dt_ else None
+            except ValueError:
+                dt_val = None
+            tot = decimal.Decimal(str(sale.get("total", "0") or "0"))
+            desc = sale.get("description")
             self.tree.insert(
                 "",
                 "end",
                 values=(
                     sid,
-                    format_date_tr(dt_),
+                    format_date_tr(dt_val),
                     format_currency(tot),
                     self._preview_description(desc)
                 ),
@@ -429,20 +469,28 @@ class CustomerDetailFrame(ttk.Frame):
         sale_id = item["values"][0]
 
         # Fetch current sale data
-        with db.session() as s:
-            sale = s.get(db.Sale, sale_id)
-            if not sale:
-                messagebox.showerror("Hata", "Satış bulunamadı.")
+        try:
+            remote_api.acquire_lock("sale", int(sale_id), mode="write")
+        except remote_api.ApiError as e:
+            if e.status == 409:
+                messagebox.showinfo("Kilitli", "Bu satış başka bir cihaz tarafından düzenleniyor.")
                 return
+            messagebox.showerror("API Hatası", e.message)
+            return
 
-            current_date = sale.date
-            current_total = sale.total
-            current_desc = sale.description or ""
+        sale = remote_api.get_sale(int(sale_id))
+        if not sale:
+            messagebox.showerror("Hata", "Satış bulunamadı.")
+            remote_api.release_lock("sale", int(sale_id))
+            return
 
-            # Get installment info for recalculation
-            installments = list(sale.installments)
-            n_installments = len(installments)
-            old_inst_sum = sum(inst.amount for inst in installments)
+        current_date = date.fromisoformat(sale.get("date"))
+        current_total = decimal.Decimal(str(sale.get("total", "0") or "0"))
+        current_desc = sale.get("description") or ""
+
+        installments = sale.get("installments") or []
+        n_installments = len(installments)
+        old_inst_sum = sum(decimal.Decimal(str(inst.get("amount", "0") or "0")) for inst in installments)
 
         # Open edit dialog
         dialog = SaleEditDialog(self, sale_id, current_date, current_total, current_desc)
@@ -461,19 +509,36 @@ class CustomerDetailFrame(ttk.Frame):
             else:
                 new_inst_amount = decimal.Decimal("0.00")
 
-            # Update sale and installments in database
-            with db.session() as s:
-                sale = s.get(db.Sale, sale_id)
-                sale.date = dialog.result["date"]
-                sale.total = new_total
-                sale.description = dialog.result["description"]
-
-                # Update all installment amounts
-                for inst in sale.installments:
-                    inst.amount = new_inst_amount
+            # Update sale and installments in API
+            try:
+                remote_api.save_sale(
+                    {
+                        "id": sale_id,
+                        "date": dialog.result["date"].isoformat(),
+                        "total": float(new_total),
+                        "description": dialog.result["description"],
+                    }
+                )
+                for inst in installments:
+                    remote_api.save_installment(
+                        {
+                            "id": inst.get("id"),
+                            "sale_id": sale_id,
+                            "due_date": inst.get("due_date"),
+                            "amount": float(new_inst_amount),
+                            "paid": inst.get("paid", 0),
+                        }
+                    )
+            except remote_api.ApiError as e:
+                messagebox.showerror("API Hatası", e.message)
+                return
+            finally:
+                remote_api.release_lock("sale", int(sale_id))
 
             messagebox.showinfo("Başarılı", "Satış ve taksitler güncellendi.")
             self.load_customer()
+        else:
+            remote_api.release_lock("sale", int(sale_id))
 
     def delete_sale(self) -> None:
         """Delete the selected sale after confirmation."""
@@ -495,10 +560,11 @@ class CustomerDetailFrame(ttk.Frame):
         if not dialog.result:
             return
 
-        with db.session() as s:
-            sale = s.get(db.Sale, sale_id)
-            if sale:
-                s.delete(sale)
+        try:
+            remote_api.delete_sale(int(sale_id))
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
 
         messagebox.showinfo("Başarılı", "Satış silindi.")
         self.load_customer()
@@ -507,12 +573,21 @@ class CustomerDetailFrame(ttk.Frame):
     def populate_years(self, cust_id: int) -> None:
         """Fill year list based on installments, default to current year."""
         this_year = date.today().year
-        with db.session() as s:
-            years = {
-                inst.due_date.year
-                for sale in s.query(db.Sale).filter_by(customer_id=cust_id)
-                for inst in sale.installments
-            }
+        years = set()
+        try:
+            sales = self._sales_cache.get(cust_id)
+            if sales is None:
+                sales = remote_api.list_sales(customer_id=cust_id, with_installments=True)
+                self._sales_cache[cust_id] = sales
+            for sale in sales:
+                for inst in sale.get("installments", []):
+                    try:
+                        due = date.fromisoformat(inst.get("due_date"))
+                    except Exception:
+                        continue
+                    years.add(due.year)
+        except remote_api.ApiError:
+            years = set()
         if not years:
             years = {this_year}
         vals = sorted(years)
@@ -524,19 +599,20 @@ class CustomerDetailFrame(ttk.Frame):
         """Load combined monthly report, update kalan toplam borç, and set ödeme defaults."""
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
-    
-        with db.session() as s:
-            rows = (
-                s.query(db.Installment.due_date, db.Installment.amount, db.Installment.paid)
-                 .join(db.Sale)
-                 .filter(
-                     db.Sale.customer_id == cust_id,
-                     func.strftime("%Y", db.Installment.due_date) == str(year)
-                 )
-                 .order_by(db.Installment.due_date)
-                 .all()
-            )
-    
+
+        rows = []
+        insts = self._installments_for_customer(cust_id)
+        for inst in insts:
+            try:
+                due_date = date.fromisoformat(inst.get("due_date"))
+            except Exception:
+                continue
+            if due_date.year != year:
+                continue
+            amount = decimal.Decimal(str(inst.get("amount", "0") or "0"))
+            paid = bool(inst.get("paid"))
+            rows.append((due_date, amount, paid))
+
         # Group by month
         grouped: dict[int, dict[str, decimal.Decimal | bool | date]] = {}
         for due_date, amount, paid in rows:
@@ -549,16 +625,15 @@ class CustomerDetailFrame(ttk.Frame):
                 grouped[m]["first_due"] = due_date
             if not paid:
                 grouped[m]["all_paid"] = False
-    
+
         # Update kalan toplam borç: sum ALL unpaid installments across ALL years
-        with db.session() as s:
-            total_debt = s.query(func.sum(db.Installment.amount)) \
-                .join(db.Sale) \
-                .filter(
-                    db.Sale.customer_id == cust_id,
-                    db.Installment.paid == 0
-                ).scalar() or decimal.Decimal("0.00")
-    
+        total_debt = decimal.Decimal("0.00")
+        for inst in insts:
+            amt = decimal.Decimal(str(inst.get("amount", "0") or "0"))
+            if inst.get("paid"):
+                continue
+            total_debt += amt
+
         self.var_total_debt.set(format_currency(total_debt))
     
         today = date.today()
@@ -637,22 +712,28 @@ class CustomerDetailFrame(ttk.Frame):
             return
         m = TURKISH_MONTHS.index(month_name)
 
-        with db.session() as s:
-            insts = (
-                s.query(db.Installment)
-                 .join(db.Sale)
-                 .filter(
-                     db.Sale.customer_id == cust_id,
-                     func.strftime("%Y", db.Installment.due_date) == str(year),
-                     func.strftime("%m", db.Installment.due_date) == f"{m:02d}"
-                 )
-                 .all()
-            )
-            if not insts:
-                messagebox.showwarning("Bulunamadı", f"{month_name} ayı için taksit bulunamadı.")
-                return
+        insts = [
+            inst for inst in self._installments_for_customer(cust_id)
+            if self._due_matches(inst, year, m)
+        ]
+        if not insts:
+            messagebox.showwarning("Bulunamadı", f"{month_name} ayı için taksit bulunamadı.")
+            return
+
+        try:
             for inst in insts:
-                inst.paid = 1
+                remote_api.save_installment(
+                    {
+                        "id": inst.get("id"),
+                        "sale_id": inst.get("sale_id"),
+                        "due_date": inst.get("due_date"),
+                        "amount": float(inst.get("amount", 0)),
+                        "paid": 1,
+                    }
+                )
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
 
         messagebox.showinfo("Ödeme Kaydedildi", f"{month_name} taksitleri ödendi.")
         self._ask_print_payment_receipt(cust_id, year, m)
@@ -682,19 +763,25 @@ class CustomerDetailFrame(ttk.Frame):
         cust_id = int(self.var_id.get())
         year = int(self.report_year_var.get())
 
-        with db.session() as s:
-            insts = (
-                s.query(db.Installment)
-                 .join(db.Sale)
-                 .filter(
-                     db.Sale.customer_id == cust_id,
-                     func.strftime("%Y", db.Installment.due_date) == str(year),
-                     func.strftime("%m", db.Installment.due_date) == f"{m:02d}"
-                 )
-                 .all()
-            )
+        insts = [
+            inst for inst in self._installments_for_customer(cust_id)
+            if self._due_matches(inst, year, m)
+        ]
+
+        try:
             for inst in insts:
-                inst.paid = 0
+                remote_api.save_installment(
+                    {
+                        "id": inst.get("id"),
+                        "sale_id": inst.get("sale_id"),
+                        "due_date": inst.get("due_date"),
+                        "amount": float(inst.get("amount", 0)),
+                        "paid": 0,
+                    }
+                )
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
 
         messagebox.showinfo("Geri Alındı", f"{month_name} ödemesi geri alındı.")
         self.load_report()

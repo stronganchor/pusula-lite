@@ -8,8 +8,7 @@ from datetime import datetime, date
 from decimal import Decimal
 from pathlib import Path
 
-import db
-from sqlalchemy import func
+import remote_api
 from date_utils import format_date_tr
 
 TURKISH_MONTHS = [
@@ -29,32 +28,61 @@ def format_currency(amount: Decimal) -> str:
 def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
     """Generate HTML for a sales receipt."""
 
-    with db.session() as s:
-        sale = s.get(db.Sale, sale_id)
-        if not sale:
-            raise ValueError(f"Sale {sale_id} not found")
+    sale = remote_api.get_sale(int(sale_id))
+    if not sale:
+        raise ValueError(f"Sale {sale_id} not found")
 
-        customer = sale.customer
-        installments = sorted(sale.installments, key=lambda x: x.due_date)
+    customer = remote_api.get_customer(int(sale.get("customer_id")))
+    if not customer:
+        raise ValueError("Customer not found")
 
-        # Calculate down payment
-        total_installments = sum(inst.amount for inst in installments)
-        down_payment = sale.total - total_installments
+    installments = sorted(
+        sale.get("installments", []),
+        key=lambda x: x.get("due_date") or "",
+    )
 
-        # Determine if this is a peşin (cash) sale
-        is_pesin = len(installments) <= 1 and down_payment >= sale.total
+    total_installments = sum(Decimal(str(inst.get("amount", "0") or "0")) for inst in installments)
+    sale_total = Decimal(str(sale.get("total", "0") or "0"))
+    down_payment = sale_total - total_installments
 
-        # Get current date/time for receipt
-        now = datetime.now()
-        tarih = format_date_tr(now)
-        saat = now.strftime("%H:%M")
+    is_pesin = len(installments) <= 1 and down_payment >= sale_total
 
-        # Build HTML
-        html = f"""<!DOCTYPE html>
+    customer_id = customer.get("id")
+    customer_name = customer.get("name", "")
+    customer_address = customer.get("address", "") or ""
+
+    sale_date_val = None
+    if sale.get("date"):
+        try:
+            sale_date_val = date.fromisoformat(sale.get("date"))
+        except Exception:
+            sale_date_val = None
+    sale_date_str = format_date_tr(sale_date_val) if sale_date_val else ""
+
+    inst_parsed = []
+    for inst in installments:
+        try:
+            due = date.fromisoformat(inst.get("due_date")) if inst.get("due_date") else None
+        except Exception:
+            due = None
+        inst_parsed.append(
+            {
+                "due": due,
+                "amount": Decimal(str(inst.get("amount", "0") or "0")),
+                "paid": bool(inst.get("paid")),
+            }
+        )
+
+    now = datetime.now()
+    tarih = format_date_tr(now)
+    saat = now.strftime("%H:%M")
+
+    # Build HTML
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Satış Makbuzu - {customer.name}</title>
+    <title>Satış Makbuzu - {customer_name}</title>
     <style>
         @media print {{
             @page {{
@@ -217,22 +245,22 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
     <div class="info-section">
         <div class="info-row">
             <span class="info-label">Hesap No:</span>
-            <span class="info-value">{customer.id}</span>
+            <span class="info-value">{customer_id}</span>
         </div>
         <div class="info-row">
             <span class="info-label">Sayın:</span>
-            <span class="info-value">{customer.name}</span>
+            <span class="info-value">{customer_name}</span>
         </div>
         <div class="info-row">
             <span class="info-label">Adres:</span>
-            <span class="info-value">{customer.address or ""}</span>
+            <span class="info-value">{customer_address}</span>
         </div>
     </div>
 
     <div class="sale-details">
         <div class="sale-row">
-            <strong>{format_date_tr(sale.date)}</strong> Tarihinde
-            <span class="amount">{format_currency(sale.total)} TL</span> Alışveriş Yapılıp
+            <strong>{sale_date_str}</strong> Tarihinde
+            <span class="amount">{format_currency(sale_total)} TL</span> Alışveriş Yapılıp
         </div>
         <div class="sale-row">
             <span class="amount">{format_currency(down_payment)} TL</span>
@@ -241,39 +269,38 @@ def generate_receipt_html(sale_id: int, company_name: str = "ENES BEKO") -> str:
     </div>
 """
 
-        # If installment sale, show installment details
-        if not is_pesin:
-            # Separate overdue and upcoming installments
-            today = datetime.now().date()
-            geciken = [inst for inst in installments if inst.due_date < today and not inst.paid]
-            taksitler = [inst for inst in installments if inst.due_date >= today and not inst.paid]
+    # If installment sale, show installment details
+    if not is_pesin:
+        today = datetime.now().date()
+        geciken = [inst for inst in inst_parsed if inst["due"] and inst["due"] < today and not inst["paid"]]
+        taksitler = [inst for inst in inst_parsed if inst["due"] and inst["due"] >= today and not inst["paid"]]
 
-            geciken_total = sum(inst.amount for inst in geciken)
-            taksitler_total = sum(inst.amount for inst in taksitler)
+        geciken_total = sum(inst["amount"] for inst in geciken)
+        taksitler_total = sum(inst["amount"] for inst in taksitler)
 
-            html += """
+        html += """
     <div class="installment-section">
         <div class="installment-columns">
             <div class="installment-col">
                 <div class="installment-header">Geciken Taksitler</div>
 """
-            if geciken:
-                for inst in geciken:
-                    html += f'                <div class="installment-item">{format_date_tr(inst.due_date)} - {format_currency(inst.amount)} TL</div>\n'
-            else:
-                html += '                <div class="installment-item">Yok</div>\n'
+        if geciken:
+            for inst in geciken:
+                html += f'                <div class="installment-item">{format_date_tr(inst["due"])} - {format_currency(inst["amount"])} TL</div>\n'
+        else:
+            html += '                <div class="installment-item">Yok</div>\n'
 
-            html += """            </div>
+        html += """            </div>
             <div class="installment-col">
                 <div class="installment-header">Yaklaşan Taksitler</div>
 """
-            if taksitler:
-                for inst in taksitler:
-                    html += f'                <div class="installment-item">{format_date_tr(inst.due_date)} - {format_currency(inst.amount)} TL</div>\n'
-            else:
-                html += '                <div class="installment-item">Yok</div>\n'
+        if taksitler:
+            for inst in taksitler:
+                html += f'                <div class="installment-item">{format_date_tr(inst["due"])} - {format_currency(inst["amount"])} TL</div>\n'
+        else:
+            html += '                <div class="installment-item">Yok</div>\n'
 
-            html += f"""            </div>
+        html += f"""            </div>
         </div>
     </div>
 
@@ -342,39 +369,31 @@ def generate_payment_receipt_html(
     """Generate HTML for an installment payment receipt."""
     month_name = TURKISH_MONTHS[month] if 0 <= month < len(TURKISH_MONTHS) else str(month)
 
-    with db.session() as s:
-        customer_row = (
-            s.query(db.Customer.id, db.Customer.name, db.Customer.address)
-             .filter_by(id=customer_id)
-             .first()
-        )
-        if not customer_row:
-            raise ValueError(f"Müşteri {customer_id} bulunamadı")
+    customer = remote_api.get_customer(customer_id)
+    if not customer:
+        raise ValueError(f"Müşteri {customer_id} bulunamadı")
 
-        rows = [
-            (due_date, amount, sale_id)
-            for due_date, amount, sale_id in (
-                s.query(
-                    db.Installment.due_date,
-                    db.Installment.amount,
-                    db.Sale.id,
-                )
-                .join(db.Sale)
-                .filter(
-                    db.Sale.customer_id == customer_id,
-                    func.strftime("%Y", db.Installment.due_date) == str(year),
-                    func.strftime("%m", db.Installment.due_date) == f"{month:02d}",
-                    db.Installment.paid == 1,
-                )
-                .order_by(db.Installment.due_date)
-                .all()
-            )
-        ]
+    rows = []
+    sales = remote_api.list_sales(customer_id=customer_id)
+    for sale in sales:
+        sale_full = remote_api.get_sale(int(sale.get("id")))
+        for inst in sale_full.get("installments", []):
+            due_str = inst.get("due_date")
+            try:
+                due_date = date.fromisoformat(due_str) if due_str else None
+            except Exception:
+                continue
+            if not due_date or due_date.year != year or due_date.month != month:
+                continue
+            if not inst.get("paid"):
+                continue
+            rows.append((due_date, Decimal(str(inst.get("amount", "0") or "0")), sale_full.get("id")))
 
     if not rows:
         raise ValueError("Bu ay için ödenmiş taksit bulunamadı.")
 
-    customer_id, customer_name, customer_address = customer_row
+    customer_name = customer.get("name", "")
+    customer_address = customer.get("address", "") or ""
     total_paid = sum(amount for _, amount, _ in rows)
     now = datetime.now()
     tarih = format_date_tr(now)

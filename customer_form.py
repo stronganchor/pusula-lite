@@ -8,10 +8,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import date
 
-from sqlalchemy import func
-
-import db
-from date_utils import format_date_tr, today_str_tr
+import remote_api
+from date_utils import format_date_tr, today_str_tr, parse_date_tr
 
 
 class AddCustomerFrame(ttk.Frame):
@@ -38,6 +36,7 @@ class AddCustomerFrame(ttk.Frame):
         self.c2_phone           = tk.StringVar()
         self.c2_home            = tk.StringVar()
         self.c2_work            = tk.StringVar()
+        self._locked_customer   = None
 
         # Layout: scrollable form so buttons stay reachable on small screens
         self.columnconfigure(0, weight=1)
@@ -251,8 +250,12 @@ class AddCustomerFrame(ttk.Frame):
 
     def _new_customer_defaults(self) -> None:
         """Set the next free ID and today’s date as defaults."""
-        with db.session() as s:
-            last = s.query(func.max(db.Customer.id)).scalar() or 0
+        self._release_lock()
+        try:
+            customers = remote_api.list_customers(limit=1)
+            last = max(int(c.get("id")) for c in customers) if customers else 0
+        except Exception:
+            last = 0
         self._default_id   = str(last + 1)
         self._default_date = today_str_tr()
 
@@ -271,28 +274,39 @@ class AddCustomerFrame(ttk.Frame):
             return
 
         cid = int(raw)
-        with db.session() as s:
-            cust = s.get(db.Customer, cid)
-            if not cust:
-                messagebox.showwarning("Bulunamadı", f"{cid} numaralı müşteri yok.")
-                return
+        if self._locked_customer and self._locked_customer != cid:
+            self._release_lock()
 
-            # Populate header + main fields
-            self.var_reg_date.set(format_date_tr(cust.registration_date))
-            self.var_name.set(cust.name or "")
-            self.var_phone.set(cust.phone or "")
-            self.var_address.set(cust.address or "")
-            self.var_work_address.set(cust.work_address or "")
-            self._set_notes_text(cust.notes or "")
+        try:
+            cust = remote_api.get_customer(cid)
+            remote_api.acquire_lock("customer", cid, mode="write")
+            self._locked_customer = cid
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+        if not cust:
+            # Creating new: clear lock state and treat as new entry
+            self._release_lock()
+            self.var_id.set(str(cid))
+            self.var_reg_date.set(today_str_tr())
+            return
 
-            # Load up to two existing contacts
-            contacts = (
-                s.query(db.Contact)
-                 .filter_by(customer_id=cid)
-                 .order_by(db.Contact.id)
-                 .limit(2)
-                 .all()
-            )
+        # Populate header + main fields
+        reg_date = cust.get("registration_date")
+        if isinstance(reg_date, str):
+            try:
+                reg_date = date.fromisoformat(reg_date)
+            except ValueError:
+                reg_date = None
+        self.var_reg_date.set(format_date_tr(reg_date))
+        self.var_name.set(cust.get("name", "") or "")
+        self.var_phone.set(cust.get("phone", "") or "")
+        self.var_address.set(cust.get("address", "") or "")
+        self.var_work_address.set(cust.get("work_address", "") or "")
+        self._set_notes_text(cust.get("notes", "") or "")
+
+        # Load up to two existing contacts
+        contacts = cust.get("contacts") or []
 
         for slot, vars in enumerate([
             (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
@@ -321,49 +335,49 @@ class AddCustomerFrame(ttk.Frame):
         raw = self.var_id.get().strip()
         cid = int(raw) if raw.isdigit() else None
 
-        with db.session() as s:
-            cust = s.get(db.Customer, cid) if cid else None
+        try:
+            reg_date_iso = parse_date_tr(self.var_reg_date.get()).isoformat()
+        except Exception:
+            reg_date_iso = date.today().isoformat()
 
-            if cust:
-                # Update existing
-                cust.name           = name
-                cust.phone          = self.var_phone.get().strip()
-                cust.address        = self.var_address.get().strip()
-                cust.work_address   = self.var_work_address.get().strip()
-                cust.notes          = self._get_notes_text()
-            else:
-                # Create new record
-                today = date.today()
-                cust = db.Customer(
-                    id=cid,
-                    name=name,
-                    phone=self.var_phone.get().strip(),
-                    address=self.var_address.get().strip(),
-                    work_address=self.var_work_address.get().strip(),
-                    notes=self._get_notes_text(),
-                    registration_date=today,
+        customer_payload = {
+            "id": cid,
+            "name": name,
+            "phone": self.var_phone.get().strip(),
+            "address": self.var_address.get().strip(),
+            "work_address": self.var_work_address.get().strip(),
+            "notes": self._get_notes_text(),
+            "registration_date": reg_date_iso,
+        }
+
+        contacts_payload = []
+        for vars in [
+            (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
+            (self.c2_name, self.c2_phone, self.c2_home, self.c2_work),
+        ]:
+            nm, ph, hm, wk = (v.get().strip() for v in vars)
+            if nm or ph or hm or wk:
+                contacts_payload.append(
+                    {
+                        "name": nm,
+                        "phone": ph,
+                        "home_address": hm,
+                        "work_address": wk,
+                    }
                 )
-                s.add(cust)
-                s.flush()
-                cid = cust.id
-                self.var_id.set(str(cid))
-                self.var_reg_date.set(format_date_tr(cust.registration_date))
 
-            # Replace both contacts
-            s.query(db.Contact).filter_by(customer_id=cid).delete()
-            for vars in [
-                (self.c1_name, self.c1_phone, self.c1_home, self.c1_work),
-                (self.c2_name, self.c2_phone, self.c2_home, self.c2_work),
-            ]:
-                nm, ph, hm, wk = (v.get().strip() for v in vars)
-                if nm or ph or hm or wk:
-                    s.add(db.Contact(
-                        customer_id=cid,
-                        name=nm,
-                        phone=ph,
-                        home_address=hm,
-                        work_address=wk,
-                    ))
+        try:
+            cid = remote_api.save_customer(customer_payload, contacts_payload)
+        except remote_api.ApiError as e:
+            messagebox.showerror("API Hatası", e.message)
+            return
+
+        self.var_id.set(str(cid))
+        try:
+            reg_date = date.fromisoformat(customer_payload["registration_date"])
+        except Exception:
+            reg_date = None
+        self.var_reg_date.set(format_date_tr(reg_date))
 
         # ** New: after saving, switch to Satış Kaydet tab with this customer **
         self.sale_frame.select_customer(cid)
@@ -385,11 +399,20 @@ class AddCustomerFrame(ttk.Frame):
             var.set("")
         self._set_notes_text("")
         self._new_customer_defaults()
-        
+
     def cancel(self) -> None:
         """Cancel and return to customer search tab."""
         self.clear_all()
         self.master.select(self.search_frame)
+
+    def _release_lock(self) -> None:
+        """Release any held customer lock."""
+        if self._locked_customer:
+            try:
+                remote_api.release_lock("customer", int(self._locked_customer))
+            except Exception:
+                pass
+            self._locked_customer = None
 
     def _on_mousewheel(self, event: tk.Event) -> None:
         """Scroll the form when the mouse wheel moves."""

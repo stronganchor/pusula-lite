@@ -9,13 +9,13 @@ import sys
 import ctypes
 
 import updater
-import db
 import app_state
 from customer_form import AddCustomerFrame
 from customer_search import CustomerSearchFrame
 from sale_form import SaleFrame
 from customer_detail import CustomerDetailFrame
 from daily_sales_report import DailySalesReportFrame
+from settings_frame import SettingsFrame
 
 class PusulaLiteApp(tk.Tk):
     """Root window with four always-available tabs."""
@@ -33,7 +33,7 @@ class PusulaLiteApp(tk.Tk):
         self.after(0, self._set_dark_titlebar)
 
         # Ensure database and tables exist
-        db.init_db()
+        # Switched to remote API; no local DB init
 
         # Notebook container
         self.notebook = ttk.Notebook(self)
@@ -48,6 +48,7 @@ class PusulaLiteApp(tk.Tk):
         self.tab_add    = AddCustomerFrame(self.notebook)
         self.tab_sale   = SaleFrame(self.notebook)
         self.tab_detail = CustomerDetailFrame(self.notebook)
+        self.tab_settings = SettingsFrame(self.notebook)
 
         # Wire cross-tab references
         self.tab_search.detail_frame = self.tab_detail
@@ -64,6 +65,7 @@ class PusulaLiteApp(tk.Tk):
         self.notebook.add(self.tab_sale,   text="Satış Kaydet")
         self.notebook.add(self.tab_detail, text="Taksitli Satış Kayıt Bilgisi")
         self.notebook.add(self.tab_report, text="Günlük Satış Raporu")
+        self.notebook.add(self.tab_settings, text="Ayarlar")
 
         # Keep Escape to quit
         self.bind_all("<Escape>", lambda e: self.quit())
