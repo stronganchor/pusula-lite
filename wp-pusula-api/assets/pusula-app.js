@@ -1024,16 +1024,22 @@
       state.selected = cust;
       fillSaleCustomer(cust);
     }
-    const total = parseFloat(document.getElementById('sale-total').value);
-    const down = parseFloat(document.getElementById('sale-down').value || '0');
-    const nInst = parseInt(document.getElementById('sale-n').value || '1', 10);
-    const dueDay = parseInt(document.getElementById('sale-due').value || '1', 10);
-    if (!total || total <= 0 || nInst < 1 || dueDay < 1 || dueDay > 28) {
-      setStatus('Satış alanlarını kontrol edin.', true);
-      return;
-    }
-    const saleDateISO = toISO(document.getElementById('sale-date').value || todayStr());
-    const saleBase = parseISODate(saleDateISO);
+	    const total = parseFloat(document.getElementById('sale-total').value);
+	    const downRaw = parseFloat(document.getElementById('sale-down').value || '0');
+	    const down = Number.isFinite(downRaw) ? Math.max(0, downRaw) : 0;
+	    const nInstRaw = parseInt(document.getElementById('sale-n').value || '1', 10);
+	    const dueDay = parseInt(document.getElementById('sale-due').value || '1', 10);
+	    const totalCents = Math.round(Math.max(0, total) * 100);
+	    const downCents = Math.round(Math.max(0, down) * 100);
+	    const isFullyPaid = totalCents > 0 && downCents >= totalCents;
+	    const nInst = isFullyPaid ? 0 : nInstRaw;
+	    const effectiveDown = isFullyPaid ? total : down;
+	    if (!total || total <= 0 || (!isFullyPaid && (nInst < 1 || dueDay < 1 || dueDay > 28))) {
+	      setStatus('Satış alanlarını kontrol edin.', true);
+	      return;
+	    }
+	    const saleDateISO = toISO(document.getElementById('sale-date').value || todayStr());
+	    const saleBase = parseISODate(saleDateISO);
     if (!saleBase) {
       setStatus('Satış tarihi geçersiz. (GG-AA-YYYY)', true);
       return;
@@ -1050,39 +1056,42 @@
           total,
           description: desc,
         }),
-      });
-      const saleId = sale.id;
-      const remaining = total - down;
-      const instAmt = Math.round((remaining / nInst) * 100) / 100;
-      const instCalls = [];
-      const instList = [];
-      for (let i = 1; i <= nInst; i++) {
-        const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
-        d.setDate(Math.min(dueDay, 28));
-        const dueIso = formatISODate(d);
-        instCalls.push(
-          api('/installments', {
-            method: 'POST',
-            body: JSON.stringify({
-              sale_id: saleId,
-              due_date: dueIso,
-              amount: instAmt,
-              paid: 0,
-            }),
-          }).then((instRes) => {
-            instList.push({
-              id: instRes?.id,
-              sale_id: saleId,
-              due_date: dueIso,
-              amount: instAmt,
-              paid: 0,
-            });
-            return instRes;
-          })
-        );
-      }
-      await Promise.all(instCalls);
-      setStatus('Satış ve taksitler kaydedildi.');
+	      });
+	      const saleId = sale.id;
+	      const instCalls = [];
+	      const instList = [];
+	      const remaining = Math.max(0, total - effectiveDown);
+	      if (nInst > 0 && remaining > 0) {
+	        const instAmt = Math.round((remaining / nInst) * 100) / 100;
+	        for (let i = 1; i <= nInst; i++) {
+	          const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
+	          d.setDate(Math.min(dueDay, 28));
+	          const dueIso = formatISODate(d);
+	          const inst = {
+	            sale_id: saleId,
+	            due_date: dueIso,
+	            amount: instAmt,
+	            paid: 0,
+	          };
+	          instList.push(inst);
+	          instCalls.push(
+	            api('/installments', {
+	              method: 'POST',
+	              body: JSON.stringify({
+	                sale_id: saleId,
+	                due_date: dueIso,
+	                amount: instAmt,
+	                paid: 0,
+	              }),
+	            }).then((instRes) => {
+	              if (instRes && instRes.id) inst.id = instRes.id;
+	              return instRes;
+	            })
+	          );
+	        }
+	        await Promise.all(instCalls);
+	      }
+	      setStatus(nInst > 0 ? 'Satış ve taksitler kaydedildi.' : 'Satış kaydedildi.');
       const newSale = {
         id: saleId,
         customer_id: Number(custId),
@@ -1105,14 +1114,14 @@
       if (state.selected) loadSales(state.selected.id, saleId);
       fillSaleCustomer(state.selected);
       updateSalePreview();
-      const saleData = {
-        id: saleId,
-        date: saleDateISO,
-        total,
-        description: desc,
-        down,
-        installments: instList,
-      };
+	      const saleData = {
+	        id: saleId,
+	        date: saleDateISO,
+	        total,
+	        description: desc,
+	        down: effectiveDown,
+	        installments: instList,
+	      };
       if (window.confirm('Satış makbuzu yazdırılsın mı?')) {
         printReceiptDetailed(saleData, state.selected || { id: custId });
       }
@@ -1125,19 +1134,46 @@
   }
 
   function updateSalePreview() {
-    const total = parseFloat(document.getElementById('sale-total')?.value || '0');
-    const down = parseFloat(document.getElementById('sale-down')?.value || '0');
-    const nInst = parseInt(document.getElementById('sale-n')?.value || '1', 10);
-    const dueDay = parseInt(document.getElementById('sale-due')?.value || '1', 10);
+    const totalEl = document.getElementById('sale-total');
+    const downEl = document.getElementById('sale-down');
+    const nEl = document.getElementById('sale-n');
+    const dueEl = document.getElementById('sale-due');
+
+    const total = parseFloat(totalEl?.value || '0');
+    const down = parseFloat(downEl?.value || '0');
+    const totalCents = Math.round(Math.max(0, total) * 100);
+    const downCents = Math.round(Math.max(0, down) * 100);
+    const isFullyPaid = totalCents > 0 && downCents >= totalCents;
+
+    if (nEl) {
+      if (isFullyPaid) {
+        if (!nEl.disabled) nEl.dataset.prevValue = nEl.value;
+        nEl.value = '0';
+        nEl.disabled = true;
+      } else if (nEl.disabled) {
+        nEl.disabled = false;
+        if (String(nEl.value) === '0') {
+          const prev = nEl.dataset.prevValue;
+          nEl.value = prev && prev !== '0' ? prev : '1';
+        }
+      }
+    }
+
+    if (dueEl) dueEl.disabled = isFullyPaid;
+
+    const nInst = parseInt(nEl?.value || '1', 10);
+    const dueDay = parseInt(dueEl?.value || '1', 10);
     const saleDate = toISO(document.getElementById('sale-date')?.value || todayStr());
     const base = parseISODate(saleDate);
-    const remain = Math.max(0, total - down);
-    const per = nInst > 0 ? (remain / nInst) : 0;
+    const remainingCents = isFullyPaid ? 0 : Math.max(0, totalCents - downCents);
+    const remain = remainingCents / 100;
+    const hasInstallments = !isFullyPaid && nInst > 0 && remainingCents > 0;
+    const per = hasInstallments ? (remain / nInst) : 0;
     const amtEl = document.getElementById('sale-preview-amt');
     const dateEl = document.getElementById('sale-preview-date');
-    if (amtEl) amtEl.textContent = isFinite(per) ? formatMoney(per) : '—';
+    if (amtEl) amtEl.textContent = hasInstallments && isFinite(per) ? formatMoney(per) : '—';
     if (dateEl) {
-      if (!base || !isFinite(dueDay)) {
+      if (!hasInstallments || !base || !isFinite(dueDay)) {
         dateEl.textContent = '—';
       } else {
         const d = new Date(base.getFullYear(), base.getMonth() + nInst, 1);
@@ -1175,6 +1211,7 @@
           <div class="detail-section-header">
             <div class="detail-section-title">Satışlar</div>
             <div class="pusula-actions detail-actions">
+              <button id="btn-print-sale" disabled>MAKBUZ YAZDIR</button>
               <button id="btn-edit-sale" disabled>DÜZELT</button>
               <button id="btn-delete-sale" disabled>SİL</button>
             </div>
@@ -1214,6 +1251,8 @@
         });
       });
     }
+    const salePrintBtn = document.getElementById('btn-print-sale');
+    if (salePrintBtn) salePrintBtn.addEventListener('click', printReceipt);
     const deleteBtn = document.getElementById('btn-delete-sale');
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteSale(state.currentSale));
     const paidBtn = document.getElementById('btn-mark-paid');
@@ -1252,8 +1291,10 @@
     state.currentSale = null;
     const editBtn = document.getElementById('btn-edit-sale');
     const deleteBtn = document.getElementById('btn-delete-sale');
+    const printBtn = document.getElementById('btn-print-sale');
     if (editBtn) editBtn.disabled = true;
     if (deleteBtn) deleteBtn.disabled = true;
+    if (printBtn) printBtn.disabled = true;
     let preferredRow = null;
     let preferredSale = null;
     rows.forEach((s, idx) => {
@@ -1264,8 +1305,10 @@
         renderInstallments(s.installments || []);
         const editBtn = document.getElementById('btn-edit-sale');
         const deleteBtn = document.getElementById('btn-delete-sale');
+        const printBtn = document.getElementById('btn-print-sale');
         if (editBtn) editBtn.disabled = false;
         if (deleteBtn) deleteBtn.disabled = false;
+        if (printBtn) printBtn.disabled = false;
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         tr.classList.add('selected');
       });
@@ -1303,6 +1346,7 @@
       renderInstallments(preferredSale.installments || []);
       if (editBtn) editBtn.disabled = false;
       if (deleteBtn) deleteBtn.disabled = false;
+      if (printBtn) printBtn.disabled = false;
       if (preferredRow && selectedSaleId) {
         try {
           preferredRow.scrollIntoView({ block: 'nearest' });
@@ -1428,10 +1472,20 @@
         });
       });
     });
+    const normalizeDueDate = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const compact = raw.length >= 10 ? raw.slice(0, 10) : raw;
+      const iso = toISO(compact) || compact;
+      const dt = parseISODate(iso);
+      return dt ? dt.getTime() : null;
+    };
     items.sort((a, b) => {
-      const da = String(a.due_date || '');
-      const db = String(b.due_date || '');
-      if (da !== db) return da.localeCompare(db);
+      const da = normalizeDueDate(a.due_date);
+      const db = normalizeDueDate(b.due_date);
+      if (da !== null && db !== null && da !== db) return da - db;
+      if (da !== null && db === null) return -1;
+      if (db !== null && da === null) return 1;
       return Number(a.sale_id || 0) - Number(b.sale_id || 0);
     });
     return items;
@@ -1621,11 +1675,46 @@
       footerSub: 'ENES EFY KARDEŞLER',
     };
 
-    const insts = (sale.installments || []).map((i) => ({ ...i, paid: isPaid(i.paid) ? 1 : 0 }));
+    const normalizeDueDate = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const compact = raw.length >= 10 ? raw.slice(0, 10) : raw;
+      const iso = toISO(compact) || compact;
+      const dt = parseISODate(iso);
+      return dt ? dt.getTime() : null;
+    };
+    const compareByDueDate = (a, b) => {
+      const da = normalizeDueDate(a?.due_date);
+      const db = normalizeDueDate(b?.due_date);
+      if (da !== null && db !== null) {
+        if (da !== db) return da - db;
+      } else if (da !== null) {
+        return -1;
+      } else if (db !== null) {
+        return 1;
+      }
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    };
+    const insts = (sale.installments || [])
+      .map((i) => ({ ...i, paid: isPaid(i.paid) ? 1 : 0 }))
+      .sort(compareByDueDate);
     const todayISO = formatISODate(new Date());
+    const todayStamp = normalizeDueDate(todayISO);
     const unpaid = insts.filter((i) => !isPaid(i.paid));
-    const overdue = unpaid.filter((i) => i.due_date && i.due_date < todayISO);
-    const upcoming = unpaid.filter((i) => i.due_date && i.due_date >= todayISO);
+    const overdue = unpaid.filter((i) => {
+      if (!i.due_date) return false;
+      const stamp = normalizeDueDate(i.due_date);
+      if (stamp !== null && todayStamp !== null) return stamp < todayStamp;
+      return String(i.due_date) < todayISO;
+    });
+    const upcoming = unpaid.filter((i) => {
+      if (!i.due_date) return false;
+      const stamp = normalizeDueDate(i.due_date);
+      if (stamp !== null && todayStamp !== null) return stamp >= todayStamp;
+      return String(i.due_date) >= todayISO;
+    });
+    overdue.sort(compareByDueDate);
+    upcoming.sort(compareByDueDate);
 
     const formatTL = (n) => formatMoney(n || 0);
     const fmtDate = (iso) => fromISOSlash(iso || '');
@@ -1635,7 +1724,11 @@
     const timeStr = `${hh}:${mm}`;
     const overdueTotal = overdue.reduce((s, i) => s + Number(i.amount || 0), 0);
     const totalInst = insts.reduce((s, i) => s + Number(i.amount || 0), 0);
-    const down = Number(sale.down || 0);
+    const saleTotal = Number(sale.total || 0);
+    const downVal = Number(sale.down);
+    const down = Number.isFinite(downVal) ? downVal : Math.max(0, saleTotal - totalInst);
+    const isInstallmentSale = insts.length > 0;
+    const receiptTitle = isInstallmentSale ? 'Taksitli Alışveriş - Satış Makbuzu' : 'Satış Makbuzu';
 
     let html = `
       <html><head><title> </title>
@@ -1682,7 +1775,7 @@
           <p class="line">${company.phone} | ${company.web}</p>
         </div>
         <div class="rule"></div>
-        <p class="title">Taksitli Alışveriş - Satış Makbuzu</p>
+        <p class="title">${receiptTitle}</p>
         <div class="meta-row">
           <div><strong>Tarih:</strong> ${fmtDate(sale.date)}</div>
           <div><strong>Saat:</strong> ${timeStr}</div>
@@ -1694,35 +1787,46 @@
         </div>
         <div class="box">
           <div class="line"><strong>${fmtDate(sale.date)}</strong> Tarihinde <span class="money">${formatTL(sale.total)}</span> Alışveriş Yapılıp</div>
-          <div class="line"><span class="money">${formatTL(down)}</span> Peşinat Alınmıştır</div>
-        </div>
+          <div class="line"><span class="money">${formatTL(isInstallmentSale ? down : saleTotal)}</span> ${isInstallmentSale ? 'Peşinat Alınmıştır' : 'Tahsil Edilmiştir'}</div>
+        </div>`;
+
+    if (isInstallmentSale) {
+      html += `
         <div class="cols">
           <div class="col">
             <h3>Geciken Taksitler</h3>
             <div class="under"></div>`;
-    if (!overdue.length) {
-      html += `<div class="item">Yok</div>`;
-    } else {
-      overdue.forEach((i) => {
-        html += `<div class="item">${fmtDate(i.due_date)} - <span class="money">${formatTL(i.amount)}</span></div>`;
-      });
-    }
-    html += `
+      if (!overdue.length) {
+        html += `<div class="item">Yok</div>`;
+      } else {
+        overdue.forEach((i) => {
+          html += `<div class="item">${fmtDate(i.due_date)} - <span class="money">${formatTL(i.amount)}</span></div>`;
+        });
+      }
+      html += `
           </div>
           <div class="col">
             <h3>Yaklaşan Taksitler</h3>
             <div class="under"></div>`;
-    upcoming.forEach((i) => {
-      html += `<div class="item">${fmtDate(i.due_date)} - <span class="money">${formatTL(i.amount)}</span></div>`;
-    });
-    html += `
+      upcoming.forEach((i) => {
+        html += `<div class="item">${fmtDate(i.due_date)} - <span class="money">${formatTL(i.amount)}</span></div>`;
+      });
+      html += `
           </div>
         </div>
         <div class="totals">
           <div class="row"><div><strong>Geciken Toplam:</strong></div><div class="money">${formatTL(overdueTotal)}</div></div>
           <div class="row"><div><strong>Taksitler Toplamı:</strong></div><div class="money">${formatTL(totalInst)}</div></div>
-          <div class="row grand"><div><strong>Genel Toplam:</strong></div><div class="money">${formatTL(sale.total)}</div></div>
-        </div>
+          <div class="row grand"><div><strong>Genel Toplam:</strong></div><div class="money">${formatTL(saleTotal)}</div></div>
+        </div>`;
+    } else {
+      html += `
+        <div class="totals">
+          <div class="row grand"><div><strong>Genel Toplam:</strong></div><div class="money">${formatTL(saleTotal)}</div></div>
+        </div>`;
+    }
+
+    html += `
         <div class="footer-rule"></div>
         <div class="footer">
           <p class="thanks">Mağazamızdan yapmış olduğunuz alış verişten dolayı teşekkür ederiz</p>
