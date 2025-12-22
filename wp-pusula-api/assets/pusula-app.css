@@ -409,6 +409,10 @@ html, body {
 .pusula-table tr.paid {
   color: #8fc48f;
 }
+.pusula-table tr.late td {
+  color: #ffb454;
+  font-weight: 700;
+}
 .pusula-table tr:hover {
   background: #223042;
 }
@@ -548,6 +552,13 @@ html, body {
   width: 28px;
   height: 28px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+  font-size: 18px;
+  border-radius: 4px;
 }
 .pusula-modal-body {
   padding: 12px;
@@ -788,4 +799,18 @@ html, body {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+}
+.report-quick-actions {
+  margin-top: 0;
+}
+.report-quick-actions button {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.pusula-actions button.secondary {
+  background: #181f2c;
+  color: #e6ecf3;
+}
+.pusula-actions button.secondary:hover {
+  background: #223042;
 }

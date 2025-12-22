@@ -1177,7 +1177,6 @@
             <div class="pusula-actions detail-actions">
               <button id="btn-edit-sale" disabled>DÜZELT</button>
               <button id="btn-delete-sale" disabled>SİL</button>
-              <button id="btn-print-sale" disabled>Makbuz Yazdır</button>
             </div>
           </div>
           <div class="pusula-table-wrapper">
@@ -1193,6 +1192,7 @@
             <div class="pusula-actions detail-actions">
               <button id="btn-mark-paid" disabled>ÖDENDİ İŞARETLE</button>
               <button id="btn-mark-unpaid" disabled>ÖDENMEDİ İŞARETLE</button>
+              <button id="btn-print-inst" disabled>Makbuz Yazdır</button>
             </div>
           </div>
           <div class="pusula-table-wrapper">
@@ -1216,12 +1216,12 @@
     }
     const deleteBtn = document.getElementById('btn-delete-sale');
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteSale(state.currentSale));
-    const printBtn = document.getElementById('btn-print-sale');
-    if (printBtn) printBtn.addEventListener('click', printReceipt);
     const paidBtn = document.getElementById('btn-mark-paid');
     const unpaidBtn = document.getElementById('btn-mark-unpaid');
     if (paidBtn) paidBtn.addEventListener('click', () => toggleInstallmentPaid(true));
     if (unpaidBtn) unpaidBtn.addEventListener('click', () => toggleInstallmentPaid(false));
+    const instPrintBtn = document.getElementById('btn-print-inst');
+    if (instPrintBtn) instPrintBtn.addEventListener('click', printSelectedInstallmentReceipt);
     setTimeout(ensureLayoutFits, 0);
   }
 
@@ -1252,8 +1252,6 @@
     state.currentSale = null;
     const editBtn = document.getElementById('btn-edit-sale');
     const deleteBtn = document.getElementById('btn-delete-sale');
-    const printBtn = document.getElementById('btn-print-sale');
-    if (printBtn) printBtn.disabled = true;
     if (editBtn) editBtn.disabled = true;
     if (deleteBtn) deleteBtn.disabled = true;
     let preferredRow = null;
@@ -1264,8 +1262,6 @@
       tr.addEventListener('click', () => {
         state.currentSale = s;
         renderInstallments(s.installments || []);
-        const printBtn = document.getElementById('btn-print-sale');
-        if (printBtn) printBtn.disabled = false;
         const editBtn = document.getElementById('btn-edit-sale');
         const deleteBtn = document.getElementById('btn-delete-sale');
         if (editBtn) editBtn.disabled = false;
@@ -1305,7 +1301,6 @@
     if (preferredSale) {
       state.currentSale = preferredSale;
       renderInstallments(preferredSale.installments || []);
-      if (printBtn) printBtn.disabled = false;
       if (editBtn) editBtn.disabled = false;
       if (deleteBtn) deleteBtn.disabled = false;
       if (preferredRow && selectedSaleId) {
@@ -1322,22 +1317,30 @@
     const tbody = document.querySelector('#pusula-inst-table tbody');
     if (!tbody) return;
     tbody.innerHTML = '';
+    state.currentInstallment = null;
+    const instPrintBtn = document.getElementById('btn-print-inst');
+    if (instPrintBtn) instPrintBtn.disabled = true;
+    const todayISO = formatISODate(new Date());
     insts.forEach((i) => {
       const tr = document.createElement('tr');
       const paid = isPaid(i.paid);
       tr.innerHTML = `<td>${fromISO(i.due_date)}</td><td>${formatMoney(i.amount || 0)}</td><td>${paid ? 'Ödendi' : 'Ödenmedi'}</td>`;
       if (paid) tr.classList.add('paid');
+      if (!paid && i.due_date && i.due_date < todayISO) tr.classList.add('late');
       tr.addEventListener('click', () => {
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         tr.classList.add('selected');
         tr.dataset.instId = i.id;
         tr.dataset.saleId = i.sale_id || (state.currentSale && state.currentSale.id);
+        state.currentInstallment = i;
         const btnPaid = document.getElementById('btn-mark-paid');
         const btnUnpaid = document.getElementById('btn-mark-unpaid');
         if (btnPaid && btnUnpaid) {
           btnPaid.disabled = false;
           btnUnpaid.disabled = false;
         }
+        const instPrintBtn = document.getElementById('btn-print-inst');
+        if (instPrintBtn) instPrintBtn.disabled = !paid;
       });
       tbody.appendChild(tr);
     });
@@ -1348,6 +1351,7 @@
       btnPaid.disabled = !hasRows;
       btnUnpaid.disabled = !hasRows;
     }
+    if (!insts.length && instPrintBtn) instPrintBtn.disabled = true;
   }
 
   async function toggleInstallmentPaid(paid) {
@@ -1363,9 +1367,209 @@
         body: JSON.stringify({ paid: paid ? 1 : 0 }),
       });
       setStatus('Taksit güncellendi.');
+      if (state.currentInstallment) state.currentInstallment.paid = paid ? 1 : 0;
+
+      if (paid && state.currentInstallment && state.selected) {
+        const due = state.currentInstallment.due_date;
+        const dt = parseISODate(due);
+        if (dt && window.confirm('Makbuz yazdırılsın mı?')) {
+          printPaymentReceiptForMonth(state.selected, dt.getFullYear(), dt.getMonth() + 1);
+        }
+      }
+
       if (state.selected) loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    }
+  }
+
+  function printSelectedInstallmentReceipt() {
+    if (!state.selected || !state.currentInstallment) return;
+    if (!isPaid(state.currentInstallment.paid)) return;
+    const dt = parseISODate(state.currentInstallment.due_date);
+    if (!dt) {
+      setStatus('Hata: Taksit tarihi bulunamadı.', true);
+      return;
+    }
+    printPaymentReceiptForMonth(state.selected, dt.getFullYear(), dt.getMonth() + 1);
+  }
+
+  function trMonthName(month1to12) {
+    const months = [
+      'Ocak',
+      'Şubat',
+      'Mart',
+      'Nisan',
+      'Mayıs',
+      'Haziran',
+      'Temmuz',
+      'Ağustos',
+      'Eylül',
+      'Ekim',
+      'Kasım',
+      'Aralık',
+    ];
+    const idx = Number(month1to12) - 1;
+    return months[idx] || '';
+  }
+
+  function collectPaidInstallmentsForMonth(year, month1to12) {
+    const items = [];
+    (state.sales || []).forEach((sale) => {
+      (sale.installments || []).forEach((inst) => {
+        if (!isPaid(inst.paid)) return;
+        const dt = parseISODate(inst.due_date);
+        if (!dt) return;
+        if (dt.getFullYear() !== Number(year) || dt.getMonth() + 1 !== Number(month1to12)) return;
+        items.push({
+          due_date: inst.due_date,
+          amount: Number(inst.amount || 0),
+          sale_id: sale.id,
+        });
+      });
+    });
+    items.sort((a, b) => {
+      const da = String(a.due_date || '');
+      const db = String(b.due_date || '');
+      if (da !== db) return da.localeCompare(db);
+      return Number(a.sale_id || 0) - Number(b.sale_id || 0);
+    });
+    return items;
+  }
+
+  function printPaymentReceiptForMonth(customer, year, month1to12) {
+    if (!customer) return;
+    const company = {
+      name: 'ENES BEKO',
+      address: 'KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA',
+      phone: 'Telefon: (0322) 329 92 32',
+      web: 'Web: https://enesbeko.com',
+      footerSub: 'ENES EFY KARDEŞLER',
+    };
+
+    const items = collectPaidInstallmentsForMonth(year, month1to12);
+    if (!items.length && state.currentInstallment && isPaid(state.currentInstallment.paid)) {
+      items.push({
+        due_date: state.currentInstallment.due_date,
+        amount: Number(state.currentInstallment.amount || 0),
+        sale_id: state.currentInstallment.sale_id || (state.currentSale && state.currentSale.id),
+      });
+    }
+    if (!items.length) {
+      setStatus('Bu ay için ödenmiş taksit bulunamadı.', true);
+      return;
+    }
+
+    const todayISO = formatISODate(new Date());
+    const totalPaid = items.reduce((sum, i) => sum + Number(i.amount || 0), 0);
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const timeStr = `${hh}:${mm}`;
+
+    const monthName = trMonthName(month1to12);
+    const customerId = customer.id || '';
+    const customerName = customer.name || '';
+    const customerAddress = customer.address || '';
+    const anyLate = items.some((i) => i.due_date && i.due_date < todayISO);
+
+    let html = `
+      <html><head><title> </title>
+      <style>
+        @page { size: A4; margin: 0; }
+        @media print {
+          .no-print { display:none; }
+          html, body { margin:0; padding:0; }
+        }
+        body { font-family: Arial, sans-serif; color:#000; margin:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .receipt { padding: 14mm; }
+        .no-print { font-size:12px; color:#000; margin:10px 0 14px; }
+        .brand { text-align:center; }
+        .brand .name { font-weight:700; font-size:18px; letter-spacing:1px; margin:0; }
+        .brand .line { font-size:11px; margin:3px 0 0; }
+        .rule { border-top:2px solid #000; margin:10px 0 12px; }
+        .title { text-align:center; font-weight:700; font-size:14px; margin:0 0 10px; }
+        .meta-row { display:flex; justify-content:space-between; font-size:12px; margin:6px 0 10px; }
+        .info { font-size:12px; margin:6px 0 12px; }
+        .info .row { display:flex; gap:10px; margin:4px 0; }
+        .info .label { width:110px; }
+        table { width:100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { border:1px solid #000; padding:6px 8px; font-size:12px; text-align:left; }
+        th { font-weight:700; }
+        .totals { margin-top: 12px; font-size:12px; }
+        .totals .row { display:flex; justify-content:space-between; margin:6px 0; }
+        .totals .grand { font-weight:700; border-top:2px solid #000; padding-top:8px; margin-top:8px; }
+        .note { margin-top: 8px; font-size: 12px; font-weight: 700; }
+        .footer-rule { border-top:2px solid #000; margin:18px 0 10px; }
+        .footer { text-align:center; font-size:11px; }
+        .footer .thanks { margin:0 0 10px; }
+        .footer .name { font-weight:700; letter-spacing:1px; margin:0; }
+        .footer .sub { margin:4px 0 0; color:#000; }
+      </style></head><body>
+      <div class="receipt">
+        <div class="no-print">Not: Yazdırma ekranında “Üstbilgi ve altbilgiler” seçeneğini kapatın.</div>
+        <div class="brand">
+          <p class="name">${company.name}</p>
+          <p class="line">${company.address}</p>
+          <p class="line">${company.phone} | ${company.web}</p>
+        </div>
+        <div class="rule"></div>
+        <p class="title">${monthName} ${year} Taksit Ödemesi</p>
+        <div class="meta-row">
+          <div><strong>Tarih:</strong> ${fromISOSlash(todayISO)}</div>
+          <div><strong>Saat:</strong> ${timeStr}</div>
+        </div>
+        <div class="info">
+          <div class="row"><div class="label"><strong>Hesap No:</strong></div><div>${customerId}</div></div>
+          <div class="row"><div class="label"><strong>Müşteri:</strong></div><div>${customerName}</div></div>
+          <div class="row"><div class="label"><strong>Adres:</strong></div><div>${customerAddress}</div></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Taksit Tarihi</th>
+              <th>Tutar</th>
+              <th>Satış No</th>
+              <th>Durum</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+    items.forEach((i) => {
+      const due = i.due_date ? String(i.due_date) : '';
+      const status = due && due < todayISO ? 'Geç Ödeme' : 'Vadesinde';
+      html += `
+            <tr>
+              <td>${fromISOSlash(due)}</td>
+              <td>${formatMoney(i.amount)}</td>
+              <td>${i.sale_id || ''}</td>
+              <td>${status}</td>
+            </tr>`;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <div class="totals">
+          <div class="row grand"><div><strong>Toplam Ödenen:</strong></div><div><strong>${formatMoney(totalPaid)}</strong></div></div>
+        </div>
+        ${anyLate ? `<div class="note">Bu ödeme vadesinden sonra yapılmıştır.</div>` : ''}
+        <div class="footer-rule"></div>
+        <div class="footer">
+          <p class="thanks">Mağazamızdan yapmış olduğunuz ödeme için teşekkür ederiz</p>
+          <p class="name">${company.name}</p>
+          <p class="sub">${company.footerSub}</p>
+        </div>
+      </div>
+      </body></html>`;
+
+    const w = window.open('', '_blank');
+    if (w) {
+      try { w.document.title = ''; } catch (e) { /* ignore */ }
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      w.print();
     }
   }
 
@@ -1538,6 +1742,23 @@
   }
 
   // ------------------- Report -------------------
+  function startOfWeekMonday(date) {
+    const d = date instanceof Date ? new Date(date) : new Date(date);
+    const day = d.getDay(); // 0=Sun, 1=Mon...
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  function setReportRange(startDate, endDate) {
+    const startEl = document.getElementById('rep-start');
+    const endEl = document.getElementById('rep-end');
+    if (!startEl || !endEl) return;
+    startEl.value = fromISO(formatISODate(startDate));
+    endEl.value = fromISO(formatISODate(endDate));
+    loadReport();
+  }
+
   function renderReportTab() {
     const root = document.getElementById('pusula-tab-report');
     if (!root) return;
@@ -1548,6 +1769,14 @@
         <label class="pusula-input"><span>Bitiş</span><input type="text" id="rep-end" value="${today}"></label>
         <div class="pusula-actions"><button id="rep-run">Raporla</button></div>
       </div>
+      <div class="pusula-actions report-quick-actions" id="rep-quick">
+        <button type="button" class="secondary" data-range="today">BUGÜN</button>
+        <button type="button" class="secondary" data-range="yesterday">DÜN</button>
+        <button type="button" class="secondary" data-range="this-week">BU HAFTA</button>
+        <button type="button" class="secondary" data-range="last-week">GEÇEN HAFTA</button>
+        <button type="button" class="secondary" data-range="this-month">BU AY</button>
+        <button type="button" class="secondary" data-range="last-month">GEÇEN AY</button>
+      </div>
       <div class="pusula-summary"><span id="rep-total">0,00₺</span> — <span id="rep-count">0</span> satış</div>
       <div class="pusula-table-wrapper">
         <table class="pusula-table" id="rep-table">
@@ -1557,6 +1786,47 @@
       </div>
     `;
     root.querySelector('#rep-run').addEventListener('click', () => loadReport());
+    root.querySelectorAll('#rep-quick [data-range]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const range = btn.getAttribute('data-range');
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (range === 'today') {
+          setReportRange(today, today);
+          return;
+        }
+        if (range === 'yesterday') {
+          const y = new Date(today);
+          y.setDate(y.getDate() - 1);
+          setReportRange(y, y);
+          return;
+        }
+        if (range === 'this-week') {
+          const start = startOfWeekMonday(today);
+          setReportRange(start, today);
+          return;
+        }
+        if (range === 'last-week') {
+          const thisWeekStart = startOfWeekMonday(today);
+          const start = new Date(thisWeekStart);
+          start.setDate(start.getDate() - 7);
+          const end = new Date(start);
+          end.setDate(end.getDate() + 6);
+          setReportRange(start, end);
+          return;
+        }
+        if (range === 'this-month') {
+          const start = new Date(today.getFullYear(), today.getMonth(), 1);
+          setReportRange(start, today);
+          return;
+        }
+        if (range === 'last-month') {
+          const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          const end = new Date(today.getFullYear(), today.getMonth(), 0);
+          setReportRange(start, end);
+        }
+      });
+    });
     setTimeout(ensureLayoutFits, 0);
   }
 
