@@ -1,8 +1,16 @@
 (() => {
   const state = {
     customers: [],
+    customerBase: [],
+    customerLoadSeq: 0,
+    isLoadingCustomers: false,
+    isSavingCustomer: false,
+    isSavingSale: false,
+    autoRefreshHandle: null,
+    autoRefreshMs: 15000,
     selected: null,
     sales: [],
+    reportSales: [],
   };
 
   const apiBase = (window.PusulaApp && PusulaApp.apiBase) || '';
@@ -13,10 +21,15 @@
     const pad = (n) => (n < 10 ? `0${n}` : n);
     return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
   };
-  const toISO = (ddmmyyyy) => {
-    if (!ddmmyyyy) return '';
-    const [d, m, y] = ddmmyyyy.split('-');
-    return `${y}-${m}-${d}`;
+  const toISO = (value) => {
+    const input = String(value || '').trim();
+    if (!input) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+    let m = input.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    m = input.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return '';
   };
   const fromISO = (iso) => {
     if (!iso) return '';
@@ -30,9 +43,95 @@
     return `${d}/${m}/${y}`;
   };
 
+  function parseISODate(iso) {
+    const s = String(iso || '').trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!y || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return new Date(y, mo - 1, d);
+  }
+
+  function formatISODate(date) {
+    const d = date instanceof Date ? date : new Date(date);
+    if (!d || Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  const formatMoney = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '0,00₺';
+    return `${num.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}₺`;
+  };
+
   const defaultDueDay = () => Math.min(new Date().getDate(), 28);
 
   const isPaid = (val) => Number(val) === 1;
+
+  function ensureLayoutFits() {
+    const app = document.getElementById('pusula-lite-app');
+    if (!app) return;
+    const needsScroll = app.scrollHeight > app.clientHeight + 1;
+    app.classList.toggle('allow-scroll', needsScroll);
+  }
+
+  function setCustomersLoading(isLoading) {
+    const wrapper = document.querySelector('#pusula-tab-search .pusula-table-wrapper');
+    if (!wrapper) return;
+    wrapper.classList.toggle('loading', Boolean(isLoading));
+  }
+
+  function getCustomerSearchFields() {
+    const root = document.getElementById('pusula-tab-search');
+    if (!root) return {};
+    const fields = {};
+    root.querySelectorAll('input[data-field]').forEach((input) => {
+      const val = input.value.trim();
+      if (val) fields[input.getAttribute('data-field')] = val;
+    });
+    return fields;
+  }
+
+  function normalizeText(s) {
+    return String(s || '').toLowerCase();
+  }
+
+  function truncateDescription(text, maxLen = 70) {
+    const raw = String(text || '').replace(/\r\n/g, '\n');
+    const firstLine = raw.split('\n')[0] || '';
+    const cleaned = firstLine.trim();
+    if (!cleaned) return '';
+    if (cleaned.length <= maxLen) return cleaned;
+    return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
+  }
+
+  function filterCustomers(rows, fields) {
+    const id = String(fields.id || '').trim();
+    const name = normalizeText(fields.name);
+    const phone = normalizeText(fields.phone);
+    const address = normalizeText(fields.address);
+    if (!id && !name && !phone && !address) return rows;
+    return (rows || []).filter((c) => {
+      if (id && !String(c.id || '').includes(id)) return false;
+      if (name && !normalizeText(c.name).includes(name)) return false;
+      if (phone && !normalizeText(c.phone).includes(phone)) return false;
+      if (address) {
+        const addr = normalizeText(c.address);
+        const work = normalizeText(c.work_address);
+        if (!addr.includes(address) && !work.includes(address)) return false;
+      }
+      return true;
+    });
+  }
+
+  function applyCustomerFilterLocal() {
+    const fields = getCustomerSearchFields();
+    const base = state.customerBase && state.customerBase.length ? state.customerBase : state.customers;
+    renderTable(filterCustomers(base || [], fields));
+  }
 
   const trErrorMessage = (msg) => {
     if (!msg) return 'Bilinmeyen hata.';
@@ -81,19 +180,284 @@
     };
   };
 
+  function activateTab(tab) {
+    const tabName = String(tab || '');
+    document.querySelectorAll('.pusula-tabs button').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('data-tab') === tabName);
+    });
+    document.querySelectorAll('.pusula-tab-content').forEach((c) => (c.style.display = 'none'));
+    const target = document.getElementById(`pusula-tab-${tabName}`);
+    if (target) target.style.display = '';
+
+    if (tabName === 'add' && !state.selected && !isAddFormDirty()) {
+      fillCustomerForm();
+    }
+    if (tabName === 'report') {
+      loadReport();
+    }
+    setTimeout(ensureLayoutFits, 0);
+  }
+
   function renderTabs() {
     document.querySelectorAll('.pusula-tabs button').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.pusula-tabs button').forEach((b) => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.getAttribute('data-tab');
-        document.querySelectorAll('.pusula-tab-content').forEach((c) => (c.style.display = 'none'));
-        const target = document.getElementById(`pusula-tab-${tab}`);
-        if (target) target.style.display = 'block';
-        if (tab === 'add' && !state.selected) {
-          fillCustomerForm();
+      btn.addEventListener('click', () => activateTab(btn.getAttribute('data-tab')));
+    });
+  }
+
+  function getActiveTabName() {
+    const btn = document.querySelector('.pusula-tabs button.active');
+    return btn ? btn.getAttribute('data-tab') : 'search';
+  }
+
+  function isUserInteracting() {
+    const app = document.getElementById('pusula-lite-app');
+    if (!app) return false;
+    const active = document.activeElement;
+    if (!active || !app.contains(active)) return false;
+    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+  }
+
+  function isAddFormDirty() {
+    const ids = [
+      'cust-name',
+      'cust-phone',
+      'cust-address',
+      'cust-work',
+      'cust-notes',
+      'c1-name',
+      'c1-phone',
+      'c1-home',
+      'c1-work',
+      'c2-name',
+      'c2-phone',
+      'c2-home',
+      'c2-work',
+    ];
+    return ids.some((id) => {
+      const el = document.getElementById(id);
+      if (!el) return false;
+      return String(el.value || '').trim().length > 0;
+    });
+  }
+
+  async function autoRefreshTick() {
+    if (document.hidden) return;
+    if (state.isSavingCustomer || state.isSavingSale || state.isLoadingCustomers) return;
+    if (document.querySelector('.pusula-modal-backdrop')) return;
+    if (isUserInteracting()) return;
+
+    const tab = getActiveTabName();
+    try {
+      await loadCustomers({ silent: true, showLoading: false });
+      if (tab === 'detail' && state.selected) {
+        await loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
+      }
+      if (tab === 'report') {
+        await loadReport({ silent: true });
+      }
+      if (tab === 'add' && !state.selected && !isAddFormDirty()) {
+        const localNext = nextCustomerId();
+        refreshNewCustomerIdFromServer(localNext);
+      }
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    }
+  }
+
+  function startAutoRefresh() {
+    if (state.autoRefreshHandle) clearInterval(state.autoRefreshHandle);
+    state.autoRefreshHandle = setInterval(autoRefreshTick, state.autoRefreshMs);
+  }
+
+  function openTextModal({
+    title,
+    hideTitle = false,
+    infoRows = [],
+    textareaLabel,
+    value,
+    saveLabel,
+    onSave,
+    deleteLabel,
+    onDelete,
+  }) {
+    const existing = document.querySelector('.pusula-modal-backdrop');
+    if (existing) existing.remove();
+
+    const hasInfo = Array.isArray(infoRows) && infoRows.length > 0;
+    const hasDelete = typeof onDelete === 'function';
+	    const showTitle = !hideTitle && title;
+	    const backdrop = document.createElement('div');
+	    backdrop.className = 'pusula-modal-backdrop';
+	    backdrop.innerHTML = `
+	      <div class="pusula-modal" role="dialog" aria-modal="true">
+	        <div class="pusula-modal-header ${showTitle ? '' : 'no-title'}">
+	          ${showTitle ? `<div class="pusula-modal-title">${title}</div>` : ''}
+	          <button class="pusula-modal-close" type="button" data-action="close" aria-label="Kapat">✕</button>
+	        </div>
+	        <div class="pusula-modal-body">
+	          <div class="pusula-modal-main ${hasInfo ? 'two-col' : 'one-col'}">
+	            ${hasInfo ? '<div class="pusula-modal-info"></div>' : ''}
+	            <div class="pusula-modal-editor">
+	              ${textareaLabel ? `<div class="pusula-modal-label">${textareaLabel}</div>` : ''}
+	              <textarea class="pusula-modal-textarea" rows="10"></textarea>
+	              <div class="pusula-modal-status" aria-live="polite"></div>
+	            </div>
+	          </div>
+	        </div>
+	        <div class="pusula-modal-actions">
+	          ${hasDelete ? `<button type="button" class="pusula-modal-btn danger" data-action="delete">${deleteLabel || 'SİL'}</button>` : ''}
+	          <button type="button" class="pusula-modal-btn" data-action="cancel">VAZGEÇ</button>
+	          <button type="button" class="pusula-modal-btn primary" data-action="save">${saveLabel || 'KAYDET'}</button>
+	        </div>
+	      </div>
+	    `;
+
+    document.body.appendChild(backdrop);
+
+    const modal = backdrop.querySelector('.pusula-modal');
+    const infoEl = backdrop.querySelector('.pusula-modal-info');
+    const textarea = backdrop.querySelector('.pusula-modal-textarea');
+    const statusEl = backdrop.querySelector('.pusula-modal-status');
+    const deleteBtn = backdrop.querySelector('[data-action="delete"]');
+    const saveBtn = backdrop.querySelector('[data-action="save"]');
+    const cancelBtn = backdrop.querySelector('[data-action="cancel"]');
+    const closeBtn = backdrop.querySelector('[data-action="close"]');
+
+    if (infoEl && hasInfo) {
+      infoRows.forEach((row) => {
+        const label = row && row.label ? String(row.label) : '';
+        const val = row && row.value !== undefined && row.value !== null ? String(row.value) : '';
+        if (!label && !val) return;
+        const rowEl = document.createElement('div');
+        rowEl.className = 'pusula-modal-info-row';
+        const labelEl = document.createElement('div');
+        labelEl.className = 'pusula-modal-info-label';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('div');
+        valueEl.className = 'pusula-modal-info-value';
+        valueEl.textContent = val;
+        rowEl.appendChild(labelEl);
+        rowEl.appendChild(valueEl);
+        infoEl.appendChild(rowEl);
+      });
+    }
+
+    if (textarea) {
+      textarea.value = value || '';
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+
+    const close = () => {
+      document.removeEventListener('keydown', onKeyDown);
+      backdrop.remove();
+      setTimeout(ensureLayoutFits, 0);
+    };
+
+    const setModalStatus = (msg, isError = false) => {
+      if (!statusEl) return;
+      statusEl.textContent = msg || '';
+      statusEl.style.color = isError ? '#f0a7a7' : '#88b7c9';
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    if (cancelBtn) cancelBtn.addEventListener('click', close);
+    if (closeBtn) closeBtn.addEventListener('click', close);
+
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        if (!onSave) return close();
+        const nextVal = textarea ? textarea.value : '';
+        if (deleteBtn) deleteBtn.disabled = true;
+        saveBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+        if (closeBtn) closeBtn.disabled = true;
+        setModalStatus('Kaydediliyor...');
+        try {
+          await onSave(nextVal);
+          close();
+        } catch (err) {
+          setModalStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+          if (deleteBtn) deleteBtn.disabled = false;
+          saveBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          if (closeBtn) closeBtn.disabled = false;
         }
       });
+    }
+
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async () => {
+        if (!onDelete) return close();
+        deleteBtn.disabled = true;
+        if (saveBtn) saveBtn.disabled = true;
+        if (cancelBtn) cancelBtn.disabled = true;
+        if (closeBtn) closeBtn.disabled = true;
+        setModalStatus('Siliniyor...');
+        try {
+          const deleted = await onDelete();
+          if (deleted === false) {
+            setModalStatus('');
+            deleteBtn.disabled = false;
+            if (saveBtn) saveBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+            if (closeBtn) closeBtn.disabled = false;
+            return;
+          }
+          close();
+        } catch (err) {
+          setModalStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+          deleteBtn.disabled = false;
+          if (saveBtn) saveBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          if (closeBtn) closeBtn.disabled = false;
+        }
+      });
+    }
+
+    if (modal) modal.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  function openSaleDescriptionEditor(sale, { customer, onUpdated } = {}) {
+    if (!sale || !sale.id) return;
+    const custId = customer && customer.id ? customer.id : sale.customer_id;
+    const custName = customer && customer.name ? customer.name : sale.customer_name;
+    const infoRows = [
+      { label: 'Satış No', value: sale.id },
+      { label: 'Tarih', value: fromISO(sale.date) },
+      { label: 'Tutar', value: formatMoney(sale.total || 0) },
+      { label: 'Müşteri No', value: custId || '' },
+      { label: 'Adı Soyadı', value: custName || '' },
+    ];
+    openTextModal({
+      hideTitle: true,
+      infoRows,
+      textareaLabel: 'Açıklama',
+      value: sale.description || '',
+      saveLabel: 'KAYDET',
+      deleteLabel: 'SİL',
+      onDelete: () => deleteSale(sale),
+      onSave: async (nextText) => {
+        const next = String(nextText ?? '');
+        await api(`/sales/${sale.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            date: sale.date,
+            total: Number(sale.total || 0),
+            description: next,
+          }),
+        });
+        sale.description = next;
+        setStatus('Açıklama güncellendi.');
+        if (onUpdated) onUpdated(next);
+      },
     });
   }
 
@@ -112,7 +476,7 @@
       </div>
       <div class="pusula-table-wrapper">
         <table class="pusula-table" id="pusula-search-table">
-          <thead><tr><th>No</th><th>İsim</th><th>Telefon</th><th>Adres</th></tr></thead>
+          <thead><tr><th>No</th><th>Kayıt Tarihi</th><th>İsim</th><th>Telefon</th><th>Adres</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -123,9 +487,13 @@
         <button id="nav-delete" disabled>MÜŞTERİ SİL</button>
       </div>
     `;
-    const debouncedSearch = debounce(loadCustomers, 75);
+    const debouncedRemote = debounce(loadCustomers, 150);
     root.querySelectorAll('input[data-field]').forEach((inp) => {
-      inp.addEventListener('input', debouncedSearch);
+      inp.addEventListener('input', () => {
+        applyCustomerFilterLocal();
+        setCustomersLoading(true);
+        debouncedRemote();
+      });
     });
     document.getElementById('nav-edit').addEventListener('click', () => {
       if (state.selected) {
@@ -154,9 +522,11 @@
     if (!tbody) return;
     tbody.innerHTML = '';
     let hasSelection = false;
-    rows.forEach((r) => {
+    const list = Array.isArray(rows) ? rows : [];
+    list.forEach((r) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${r.id}</td><td>${r.name || ''}</td><td>${r.phone || ''}</td><td>${r.address || ''}</td>`;
+      const reg = r.registration_date ? fromISO(r.registration_date) : '';
+      tr.innerHTML = `<td>${r.id}</td><td>${reg}</td><td>${r.name || ''}</td><td>${r.phone || ''}</td><td>${r.address || ''}</td>`;
       const isSelected = state.selected && String(state.selected.id) === String(r.id);
       tr.addEventListener('click', () => {
         state.selected = r;
@@ -182,36 +552,63 @@
       }
       tbody.appendChild(tr);
     });
-    if (!rows.length || !hasSelection) {
+    if (!list.length) {
+      const fields = getCustomerSearchFields();
+      const hasFilters = Boolean(fields.id || fields.name || fields.phone || fields.address);
+      const msg = hasFilters ? 'Arama kriterlerine uygun müşteri bulunamadı.' : 'Henüz müşteri kaydı yok.';
+      const tr = document.createElement('tr');
+      tr.className = 'pusula-empty-row';
+      tr.innerHTML = `<td colspan="5" class="pusula-empty-cell">${msg}</td>`;
+      tbody.appendChild(tr);
+    }
+
+    if (!list.length || !hasSelection) {
       enableNav(false);
     }
   }
 
-  async function loadCustomers() {
-    const root = document.getElementById('pusula-tab-search');
-    if (!root) return;
-    const fields = {};
-    root.querySelectorAll('input[data-field]').forEach((input) => {
-      const val = input.value.trim();
-      if (val) fields[input.getAttribute('data-field')] = val;
-    });
+  async function loadCustomers({ silent = false, showLoading = true } = {}) {
+    const fields = getCustomerSearchFields();
+    const seq = ++state.customerLoadSeq;
+    state.isLoadingCustomers = true;
+    if (showLoading) setCustomersLoading(true);
     try {
-      const query = new URLSearchParams({ limit: 100 });
+      const query = new URLSearchParams({ limit: 500 });
       ['id','name','phone','address'].forEach((f) => {
         if (fields[f]) query.append(f, fields[f]);
       });
       const rows = await api(`/customers?${query.toString()}`);
+      if (seq !== state.customerLoadSeq) return;
       state.customers = rows || [];
+      if (!fields.id && !fields.name && !fields.phone && !fields.address) {
+        state.customerBase = state.customers;
+      }
       renderTable(state.customers);
-      setStatus(`${state.customers.length} kayıt yüklendi.`);
-      const addTab = document.querySelector('#pusula-tab-add');
-      if (!state.selected && addTab && addTab.style.display !== 'none') {
-        fillCustomerForm();
+      if (!silent) setStatus(`${state.customers.length} kayıt yüklendi.`);
+      if (getActiveTabName() === 'add' && !state.selected && !isAddFormDirty()) {
+        refreshNewCustomerIdFromServer(nextCustomerId());
       }
     } catch (err) {
+      if (seq !== state.customerLoadSeq) return;
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
       enableNav(false);
+    } finally {
+      if (seq === state.customerLoadSeq) {
+        state.isLoadingCustomers = false;
+        if (showLoading) setCustomersLoading(false);
+      }
     }
+    setTimeout(ensureLayoutFits, 0);
+  }
+
+  async function fetchCustomerById(customerId) {
+    const id = String(customerId || '').trim();
+    if (!/^\d+$/.test(id)) return null;
+    const local = state.customers.find((c) => String(c.id) === id);
+    if (local) return local;
+    const rows = await api(`/customers?id=${encodeURIComponent(id)}&limit=1`);
+    if (rows && rows[0]) return rows[0];
+    return null;
   }
 
   function enableNav(enabled) {
@@ -224,6 +621,7 @@
   async function deleteCustomer() {
     if (!state.selected) return;
     if (!window.confirm('Bu müşteriyi silmek istediğinize emin misiniz?')) return;
+    if (!window.confirm('Dikkat: Bu işlem geri alınamaz. Müşteriye ait tüm satış ve taksit kayıtları silinecek. Devam etmek istiyor musunuz?')) return;
     try {
       await api(`/customers/${state.selected.id}`, { method: 'DELETE' });
       setStatus('Müşteri silindi.');
@@ -314,12 +712,15 @@
         </div>
       </div>
       <div class="pusula-actions add-actions">
-        <button id="cust-save">Kaydet</button>
-        <button id="cust-clear">Temizle</button>
+        <button id="cust-save">KAYDET</button>
+        <button id="cust-clear">TEMİZLE</button>
       </div>
     `;
     root.querySelector('#cust-save').addEventListener('click', saveCustomer);
-    root.querySelector('#cust-clear').addEventListener('click', () => fillCustomerForm());
+    root.querySelector('#cust-clear').addEventListener('click', () => {
+      state.selected = null;
+      fillCustomerForm();
+    });
     fillCustomerForm();
   }
 
@@ -346,13 +747,17 @@
   function fillCustomerForm(cust = null) {
     const set = (id, val) => {
       const el = document.getElementById(id);
-      if (el) el.value = val || '';
+      if (!el) return;
+      if ('value' in el) el.value = val || '';
+      else el.textContent = val || '';
     };
     if (!cust) {
       ['cust-id','cust-name','cust-phone','cust-address','cust-work','cust-notes','c1-name','c1-phone','c1-home','c1-work','c2-name','c2-phone','c2-home','c2-work'].forEach((id) => set(id, ''));
-      set('cust-id', String(nextCustomerId()));
+      const localNext = nextCustomerId();
+      set('cust-id', String(localNext));
       set('cust-date-label', todayStr());
       set('cust-date-hidden', todayStr());
+      refreshNewCustomerIdFromServer(localNext);
       return;
     }
     set('cust-id', cust.id || '');
@@ -377,12 +782,37 @@
   }
 
   function nextCustomerId() {
-    if (!state.customers || !state.customers.length) return 1;
-    const maxId = state.customers.reduce((m, c) => Math.max(m, parseInt(c.id, 10) || 0), 0);
+    const base = state.customerBase && state.customerBase.length ? state.customerBase : state.customers;
+    if (!base || !base.length) return 1;
+    const maxId = base.reduce((m, c) => Math.max(m, parseInt(c.id, 10) || 0), 0);
     return maxId + 1;
   }
 
+  async function refreshNewCustomerIdFromServer(expectedId) {
+    const idEl = document.getElementById('cust-id');
+    if (!idEl) return;
+    const before = idEl.value.trim();
+    if (before && expectedId && before !== String(expectedId)) return;
+    try {
+      const res = await api('/customers/next-id');
+      const nextId = Number(res && res.next_id);
+      if (!Number.isFinite(nextId) || nextId < 1) return;
+      const nowEl = document.getElementById('cust-id');
+      if (!nowEl) return;
+      if (nowEl.value.trim() !== before) return;
+      nowEl.value = String(nextId);
+    } catch (e) {
+      // ignore (fallback already set)
+    }
+  }
+
   async function saveCustomer() {
+    const addRoot = document.getElementById('pusula-tab-add');
+    const saveBtn = document.getElementById('cust-save');
+    const clearBtn = document.getElementById('cust-clear');
+    const tabButtons = Array.from(document.querySelectorAll('.pusula-tabs button'));
+    const prevSaveHtml = saveBtn ? saveBtn.innerHTML : '';
+
     const name = document.getElementById('cust-name').value.trim();
     if (!name) {
       setStatus('Adı Soyadı zorunlu.', true);
@@ -406,6 +836,18 @@
       delete payload.id; // let backend assign id
     }
     try {
+      state.isSavingCustomer = true;
+      setStatus('Kaydediliyor...');
+      if (addRoot) {
+        addRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+          if (el.type === 'hidden') return;
+          el.disabled = true;
+        });
+      }
+      tabButtons.forEach((b) => { b.disabled = true; });
+      if (saveBtn) saveBtn.innerHTML = `<span class="pusula-spinner" aria-hidden="true"></span>KAYDEDİLİYOR...`;
+      if (clearBtn) clearBtn.disabled = true;
+
       const res = await api(url, {
         method,
         body: JSON.stringify(payload),
@@ -428,19 +870,50 @@
       } else {
         state.customers.unshift(newCust);
       }
+      if (state.customerBase && state.customerBase.length) {
+        const baseIdx = state.customerBase.findIndex((c) => String(c.id) === String(newCust.id));
+        if (baseIdx >= 0) state.customerBase[baseIdx] = newCust;
+        else state.customerBase.unshift(newCust);
+      }
       state.selected = newCust;
       renderTable(state.customers);
       enableNav(true);
       updateDetail(newCust);
       fillCustomerForm(newCust);
+      resetSaleForm();
       fillSaleCustomer(newCust);
-      document.querySelector('button[data-tab="sale"]').click();
+      activateTab('sale');
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    } finally {
+      state.isSavingCustomer = false;
+      if (saveBtn) saveBtn.innerHTML = prevSaveHtml || 'KAYDET';
+      if (addRoot) {
+        addRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+          if (el.type === 'hidden') return;
+          el.disabled = false;
+        });
+      }
+      tabButtons.forEach((b) => { b.disabled = false; });
+      setTimeout(ensureLayoutFits, 0);
     }
   }
 
   // ------------------- Sale -------------------
+  function resetSaleForm() {
+    const setVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.value = val;
+    };
+    setVal('sale-date', todayStr());
+    setVal('sale-total', '');
+    setVal('sale-down', '0');
+    setVal('sale-n', '1');
+    setVal('sale-due', String(defaultDueDay()));
+    setVal('sale-desc', '');
+    updateSalePreview();
+  }
+
   function renderSaleTab() {
     const root = document.getElementById('pusula-tab-sale');
     if (!root) return;
@@ -487,8 +960,8 @@
         </div>
       </div>
       <div class="pusula-actions sale-actions">
-        <button id="sale-save">Kaydet</button>
-        <button id="sale-clear">Temizle</button>
+        <button id="sale-save">KAYDET</button>
+        <button id="sale-clear">TEMİZLE</button>
       </div>
     `;
     root.querySelector('#sale-save').addEventListener('click', saveSale);
@@ -504,7 +977,28 @@
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateSalePreview);
     });
+    const custIdEl = document.getElementById('sale-cust-id');
+    if (custIdEl) {
+      const debouncedLookup = debounce(async () => {
+        const id = custIdEl.value.trim();
+        const nameEl = document.getElementById('sale-cust-name');
+        if (!id) {
+          if (nameEl) nameEl.value = '';
+          return;
+        }
+        const cust = await fetchCustomerById(id);
+        if (cust) {
+          state.selected = cust;
+          fillSaleCustomer(cust);
+        } else if (nameEl) {
+          nameEl.value = '';
+        }
+      }, 200);
+      custIdEl.addEventListener('input', debouncedLookup);
+      custIdEl.addEventListener('blur', debouncedLookup);
+    }
     updateSalePreview();
+    setTimeout(ensureLayoutFits, 0);
   }
 
   function fillSaleCustomer(cust) {
@@ -521,6 +1015,15 @@
       setStatus('Müşteri seçiniz.', true);
       return;
     }
+    if (!state.selected || String(state.selected.id) !== String(custId)) {
+      const cust = await fetchCustomerById(custId);
+      if (!cust) {
+        setStatus('Hata: Müşteri bulunamadı.', true);
+        return;
+      }
+      state.selected = cust;
+      fillSaleCustomer(cust);
+    }
     const total = parseFloat(document.getElementById('sale-total').value);
     const down = parseFloat(document.getElementById('sale-down').value || '0');
     const nInst = parseInt(document.getElementById('sale-n').value || '1', 10);
@@ -530,8 +1033,14 @@
       return;
     }
     const saleDateISO = toISO(document.getElementById('sale-date').value || todayStr());
+    const saleBase = parseISODate(saleDateISO);
+    if (!saleBase) {
+      setStatus('Satış tarihi geçersiz. (GG-AA-YYYY)', true);
+      return;
+    }
     const desc = document.getElementById('sale-desc').value.trim();
     try {
+      state.isSavingSale = true;
       setStatus('Kaydediliyor...');
       const sale = await api('/sales', {
         method: 'POST',
@@ -548,10 +1057,9 @@
       const instCalls = [];
       const instList = [];
       for (let i = 1; i <= nInst; i++) {
-        const d = new Date(saleDateISO);
-        d.setMonth(d.getMonth() + i);
+        const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
         d.setDate(Math.min(dueDay, 28));
-        const dueIso = d.toISOString().slice(0, 10);
+        const dueIso = formatISODate(d);
         instCalls.push(
           api('/installments', {
             method: 'POST',
@@ -575,7 +1083,26 @@
       }
       await Promise.all(instCalls);
       setStatus('Satış ve taksitler kaydedildi.');
-      if (state.selected) loadSales(state.selected.id);
+      const newSale = {
+        id: saleId,
+        customer_id: Number(custId),
+        customer_name: (state.selected && state.selected.name) || '',
+        date: saleDateISO,
+        total,
+        description: desc,
+        installments: instList,
+      };
+      const withoutDup = (state.sales || []).filter((s) => String(s.id) !== String(saleId));
+      state.sales = [newSale, ...withoutDup].sort((a, b) => {
+        const da = String(a.date || '');
+        const db = String(b.date || '');
+        if (da !== db) return db.localeCompare(da);
+        return Number(b.id || 0) - Number(a.id || 0);
+      });
+      updateDetail(state.selected);
+      renderSalesTable(state.sales, { selectedSaleId: saleId });
+      activateTab('detail');
+      if (state.selected) loadSales(state.selected.id, saleId);
       fillSaleCustomer(state.selected);
       updateSalePreview();
       const saleData = {
@@ -591,7 +1118,10 @@
       }
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    } finally {
+      state.isSavingSale = false;
     }
+    setTimeout(ensureLayoutFits, 0);
   }
 
   function updateSalePreview() {
@@ -600,19 +1130,19 @@
     const nInst = parseInt(document.getElementById('sale-n')?.value || '1', 10);
     const dueDay = parseInt(document.getElementById('sale-due')?.value || '1', 10);
     const saleDate = toISO(document.getElementById('sale-date')?.value || todayStr());
+    const base = parseISODate(saleDate);
     const remain = Math.max(0, total - down);
     const per = nInst > 0 ? (remain / nInst) : 0;
     const amtEl = document.getElementById('sale-preview-amt');
     const dateEl = document.getElementById('sale-preview-date');
-    if (amtEl) amtEl.textContent = isFinite(per) ? per.toFixed(2) + ' ₺' : '—';
+    if (amtEl) amtEl.textContent = isFinite(per) ? formatMoney(per) : '—';
     if (dateEl) {
-      if (!saleDate || !isFinite(dueDay)) {
+      if (!base || !isFinite(dueDay)) {
         dateEl.textContent = '—';
       } else {
-        const d = new Date(saleDate);
-        d.setMonth(d.getMonth() + nInst);
+        const d = new Date(base.getFullYear(), base.getMonth() + nInst, 1);
         d.setDate(Math.min(dueDay, 28));
-        dateEl.textContent = fromISO(d.toISOString().slice(0, 10));
+        dateEl.textContent = fromISO(formatISODate(d));
       }
     }
   }
@@ -622,50 +1152,81 @@
     const root = document.getElementById('pusula-tab-detail');
     if (!root) return;
     root.innerHTML = `
-      <div id="pusula-detail-header" class="pusula-card">
-        <p><strong>No:</strong> <span data-field="id">-</span></p>
-        <p><strong>İsim:</strong> <span data-field="name">-</span></p>
-        <p><strong>Telefon:</strong> <span data-field="phone">-</span></p>
-        <p><strong>Adres:</strong> <span data-field="address">-</span></p>
+      <div id="pusula-detail-summary" class="detail-summary">
+        <div class="detail-item">
+          <span class="detail-label">No:</span>
+          <span class="detail-value" data-field="id">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">İsim:</span>
+          <span class="detail-value" data-field="name">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Telefon:</span>
+          <span class="detail-value" data-field="phone">-</span>
+        </div>
+        <div class="detail-item detail-item-wide">
+          <span class="detail-label">Adres:</span>
+          <span class="detail-value" data-field="address">-</span>
+        </div>
       </div>
-      <div class="pusula-flex">
-        <div class="pusula-half">
-          <h4 class="pusula-subtitle">Satışlar</h4>
+      <div class="detail-stack">
+        <div class="detail-section">
+          <div class="detail-section-header">
+            <div class="detail-section-title">Satışlar</div>
+            <div class="pusula-actions detail-actions">
+              <button id="btn-edit-sale" disabled>DÜZELT</button>
+              <button id="btn-delete-sale" disabled>SİL</button>
+              <button id="btn-print-sale" disabled>Makbuz Yazdır</button>
+            </div>
+          </div>
           <div class="pusula-table-wrapper">
             <table class="pusula-table" id="pusula-sales-table">
               <thead><tr><th>No</th><th>Tarih</th><th>Tutar</th><th>Açıklama</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
-          <div class="pusula-actions">
-            <button id="btn-print-sale" disabled>Makbuz Yazdır</button>
-          </div>
         </div>
-        <div class="pusula-half">
-          <h4 class="pusula-subtitle">Taksitler</h4>
+        <div class="detail-section">
+          <div class="detail-section-header">
+            <div class="detail-section-title">Taksitler</div>
+            <div class="pusula-actions detail-actions">
+              <button id="btn-mark-paid" disabled>ÖDENDİ İŞARETLE</button>
+              <button id="btn-mark-unpaid" disabled>ÖDENMEDİ İŞARETLE</button>
+            </div>
+          </div>
           <div class="pusula-table-wrapper">
             <table class="pusula-table" id="pusula-inst-table">
               <thead><tr><th>Vade</th><th>Tutar</th><th>Durum</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
-          <div class="pusula-actions">
-            <button id="btn-mark-paid" disabled>Ödendi İşaretle</button>
-            <button id="btn-mark-unpaid" disabled>Ödenmedi İşaretle</button>
-          </div>
         </div>
       </div>
     `;
+    const editBtn = document.getElementById('btn-edit-sale');
+    if (editBtn) {
+      editBtn.addEventListener('click', () => {
+        if (!state.currentSale) return;
+        openSaleDescriptionEditor(state.currentSale, {
+          customer: state.selected,
+          onUpdated: () => renderSalesTable(state.sales || [], { selectedSaleId: state.currentSale.id }),
+        });
+      });
+    }
+    const deleteBtn = document.getElementById('btn-delete-sale');
+    if (deleteBtn) deleteBtn.addEventListener('click', () => deleteSale(state.currentSale));
     const printBtn = document.getElementById('btn-print-sale');
     if (printBtn) printBtn.addEventListener('click', printReceipt);
     const paidBtn = document.getElementById('btn-mark-paid');
     const unpaidBtn = document.getElementById('btn-mark-unpaid');
     if (paidBtn) paidBtn.addEventListener('click', () => toggleInstallmentPaid(true));
     if (unpaidBtn) unpaidBtn.addEventListener('click', () => toggleInstallmentPaid(false));
+    setTimeout(ensureLayoutFits, 0);
   }
 
   function updateDetail(cust) {
-    const root = document.getElementById('pusula-detail-header');
+    const root = document.getElementById('pusula-detail-summary');
     if (!root) return;
     ['id','name','phone','address'].forEach((field) => {
       const el = root.querySelector(`[data-field="${field}"]`);
@@ -673,42 +1234,86 @@
     });
   }
 
-  async function loadSales(customerId) {
+  async function loadSales(customerId, selectedSaleId = null) {
     try {
       state.sales = await api(`/sales?customer_id=${customerId}&with=installments`);
-      renderSalesTable(state.sales);
+      renderSalesTable(state.sales, { selectedSaleId });
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
       state.sales = [];
-      renderSalesTable([]);
+      renderSalesTable([], { selectedSaleId });
     }
   }
 
-  function renderSalesTable(rows) {
+  function renderSalesTable(rows, { selectedSaleId = null } = {}) {
     const tbody = document.querySelector('#pusula-sales-table tbody');
     if (!tbody) return;
     tbody.innerHTML = '';
     state.currentSale = null;
+    const editBtn = document.getElementById('btn-edit-sale');
+    const deleteBtn = document.getElementById('btn-delete-sale');
     const printBtn = document.getElementById('btn-print-sale');
     if (printBtn) printBtn.disabled = true;
+    if (editBtn) editBtn.disabled = true;
+    if (deleteBtn) deleteBtn.disabled = true;
+    let preferredRow = null;
+    let preferredSale = null;
     rows.forEach((s, idx) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${s.id}</td><td>${fromISO(s.date)}</td><td>${Number(s.total || 0).toFixed(2)}</td><td>${s.description || ''}</td>`;
+      tr.innerHTML = `<td>${s.id}</td><td>${fromISO(s.date)}</td><td>${formatMoney(s.total || 0)}</td><td>${truncateDescription(s.description || '')}</td>`;
       tr.addEventListener('click', () => {
         state.currentSale = s;
         renderInstallments(s.installments || []);
         const printBtn = document.getElementById('btn-print-sale');
         if (printBtn) printBtn.disabled = false;
+        const editBtn = document.getElementById('btn-edit-sale');
+        const deleteBtn = document.getElementById('btn-delete-sale');
+        if (editBtn) editBtn.disabled = false;
+        if (deleteBtn) deleteBtn.disabled = false;
+        tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
+        tr.classList.add('selected');
       });
-      tbody.appendChild(tr);
-      if (idx === 0) {
-        state.currentSale = s;
-        renderInstallments(s.installments || []);
-        const printBtn = document.getElementById('btn-print-sale');
-        if (printBtn) printBtn.disabled = false;
+      tr.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        const descCell = tr.querySelector('td:last-child');
+        openSaleDescriptionEditor(s, {
+          customer: state.selected,
+          onUpdated: (next) => {
+            if (descCell) descCell.textContent = truncateDescription(next || '');
+            if (state.currentSale && String(state.currentSale.id) === String(s.id)) {
+              state.currentSale.description = next;
+            }
+          },
+        });
+      });
+      if (selectedSaleId && String(s.id) === String(selectedSaleId)) {
+        preferredRow = tr;
+        preferredSale = s;
+        tr.classList.add('selected');
+      } else if (!selectedSaleId && idx === 0) {
+        preferredRow = tr;
+        preferredSale = s;
+        tr.classList.add('selected');
       }
+      tbody.appendChild(tr);
     });
-    if (!rows.length) {
+    if (!preferredSale && rows.length) {
+      preferredSale = rows[0];
+      preferredRow = tbody.querySelector('tr');
+      if (preferredRow) preferredRow.classList.add('selected');
+    }
+    if (preferredSale) {
+      state.currentSale = preferredSale;
+      renderInstallments(preferredSale.installments || []);
+      if (printBtn) printBtn.disabled = false;
+      if (editBtn) editBtn.disabled = false;
+      if (deleteBtn) deleteBtn.disabled = false;
+      if (preferredRow && selectedSaleId) {
+        try {
+          preferredRow.scrollIntoView({ block: 'nearest' });
+        } catch (e) { /* ignore */ }
+      }
+    } else if (!rows.length) {
       renderInstallments([]);
     }
   }
@@ -720,7 +1325,7 @@
     insts.forEach((i) => {
       const tr = document.createElement('tr');
       const paid = isPaid(i.paid);
-      tr.innerHTML = `<td>${fromISO(i.due_date)}</td><td>${Number(i.amount || 0).toFixed(2)}</td><td>${paid ? 'Ödendi' : 'Ödenmedi'}</td>`;
+      tr.innerHTML = `<td>${fromISO(i.due_date)}</td><td>${formatMoney(i.amount || 0)}</td><td>${paid ? 'Ödendi' : 'Ödenmedi'}</td>`;
       if (paid) tr.classList.add('paid');
       tr.addEventListener('click', () => {
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
@@ -758,9 +1363,28 @@
         body: JSON.stringify({ paid: paid ? 1 : 0 }),
       });
       setStatus('Taksit güncellendi.');
-      if (state.selected) loadSales(state.selected.id);
+      if (state.selected) loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    }
+  }
+
+  async function deleteSale(sale) {
+    const s = sale && sale.id ? sale : null;
+    if (!s) return false;
+    if (!window.confirm('Bu satışı silmek istediğinize emin misiniz?')) return false;
+    if (!window.confirm('Dikkat: Bu işlem geri alınamaz. Bu satışa bağlı tüm taksitler de silinecek. Devam etmek istiyor musunuz?')) return false;
+    try {
+      setStatus('Siliniyor...');
+      await api(`/sales/${s.id}`, { method: 'DELETE' });
+      setStatus('Satış silindi.');
+      const keepSelectedId = state.currentSale && String(state.currentSale.id) !== String(s.id) ? state.currentSale.id : null;
+      state.sales = (state.sales || []).filter((row) => String(row.id) !== String(s.id));
+      renderSalesTable(state.sales || [], { selectedSaleId: keepSelectedId });
+      return true;
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+      return false;
     }
   }
 
@@ -794,12 +1418,12 @@
     };
 
     const insts = (sale.installments || []).map((i) => ({ ...i, paid: isPaid(i.paid) ? 1 : 0 }));
-    const todayISO = new Date().toISOString().slice(0, 10);
+    const todayISO = formatISODate(new Date());
     const unpaid = insts.filter((i) => !isPaid(i.paid));
     const overdue = unpaid.filter((i) => i.due_date && i.due_date < todayISO);
     const upcoming = unpaid.filter((i) => i.due_date && i.due_date >= todayISO);
 
-    const formatTL = (n) => `${Number(n || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL`;
+    const formatTL = (n) => formatMoney(n || 0);
     const fmtDate = (iso) => fromISOSlash(iso || '');
     const now = new Date();
     const hh = String(now.getHours()).padStart(2, '0');
@@ -819,7 +1443,7 @@
         }
         body { font-family: Arial, sans-serif; color:#000; margin:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .receipt { padding: 14mm; }
-        .no-print { font-size:12px; color:#444; margin:10px 0 14px; }
+        .no-print { font-size:12px; color:#000; margin:10px 0 14px; }
         .brand { text-align:center; }
         .brand .name { font-weight:700; font-size:18px; letter-spacing:1px; margin:0; }
         .brand .line { font-size:11px; margin:3px 0 0; }
@@ -829,14 +1453,14 @@
         .info { font-size:12px; margin:8px 0 12px; }
         .info .row { display:flex; gap:10px; margin:4px 0; }
         .info .label { width:90px; }
-        .box { border:1px solid #ddd; border-radius:4px; padding:10px 12px; font-size:12px; margin:10px 0 14px; }
+        .box { border:1px solid #000; border-radius:4px; padding:10px 12px; font-size:12px; margin:10px 0 14px; }
         .box .line { margin:3px 0; }
         .cols { display:flex; gap:30px; }
         .col { flex:1; }
         .col h3 { font-size:12px; margin:0; font-weight:700; }
-        .col .under { border-bottom:1px solid #ccc; margin:6px 0 8px; }
+        .col .under { border-bottom:1px solid #000; margin:6px 0 8px; }
         .item { font-size:12px; margin:6px 0; }
-        .money { color:#1a58d3; font-weight:700; }
+        .money { color:#000; font-weight:700; }
         .totals { margin-top:16px; font-size:12px; }
         .totals .row { display:flex; justify-content:space-between; margin:6px 0; }
         .totals .grand { font-weight:700; border-top:2px solid #000; padding-top:8px; margin-top:8px; }
@@ -844,7 +1468,7 @@
         .footer { text-align:center; font-size:11px; }
         .footer .thanks { margin:0 0 10px; }
         .footer .name { font-weight:700; letter-spacing:1px; margin:0; }
-        .footer .sub { margin:4px 0 0; color:#444; }
+        .footer .sub { margin:4px 0 0; color:#000; }
       </style></head><body>
       <div class="receipt">
         <div class="no-print">Not: Yazdırma ekranında “Üstbilgi ve altbilgiler” seçeneğini kapatın.</div>
@@ -924,34 +1548,52 @@
         <label class="pusula-input"><span>Bitiş</span><input type="text" id="rep-end" value="${today}"></label>
         <div class="pusula-actions"><button id="rep-run">Raporla</button></div>
       </div>
-      <div class="pusula-summary"><span id="rep-total">0,00</span> ₺ — <span id="rep-count">0</span> satış</div>
-      <table class="pusula-table" id="rep-table">
-        <thead><tr><th>No</th><th>Müşteri</th><th>Tarih</th><th>Tutar</th><th>Açıklama</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div class="pusula-summary"><span id="rep-total">0,00₺</span> — <span id="rep-count">0</span> satış</div>
+      <div class="pusula-table-wrapper">
+        <table class="pusula-table" id="rep-table">
+          <thead><tr><th>No</th><th>Müşteri</th><th>Tarih</th><th>Tutar</th><th>Açıklama</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     `;
-    root.querySelector('#rep-run').addEventListener('click', loadReport);
+    root.querySelector('#rep-run').addEventListener('click', () => loadReport());
+    setTimeout(ensureLayoutFits, 0);
   }
 
-  async function loadReport() {
-    const start = document.getElementById('rep-start').value || todayStr();
-    const end = document.getElementById('rep-end').value || todayStr();
+  async function loadReport({ silent = false } = {}) {
+    const startEl = document.getElementById('rep-start');
+    const endEl = document.getElementById('rep-end');
+    if (!startEl || !endEl) return;
+    const start = startEl.value || todayStr();
+    const end = endEl.value || todayStr();
     try {
       const rows = await api(`/sales?start=${toISO(start)}&end=${toISO(end)}`);
+      state.reportSales = rows || [];
       const total = rows.reduce((sum, s) => sum + Number(s.total || 0), 0);
-      document.getElementById('rep-total').textContent = total.toFixed(2);
+      document.getElementById('rep-total').textContent = formatMoney(total);
       document.getElementById('rep-count').textContent = rows.length;
       const tbody = document.querySelector('#rep-table tbody');
       tbody.innerHTML = '';
       rows.forEach((s) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${s.id}</td><td>${s.customer_name || ''}</td><td>${fromISO(s.date)}</td><td>${Number(s.total || 0).toFixed(2)}</td><td>${s.description || ''}</td>`;
+        tr.innerHTML = `<td>${s.id}</td><td>${s.customer_name || ''}</td><td>${fromISO(s.date)}</td><td>${formatMoney(s.total || 0)}</td><td>${truncateDescription(s.description || '')}</td>`;
+        tr.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          const descCell = tr.querySelector('td:last-child');
+          openSaleDescriptionEditor(s, {
+            customer: { id: s.customer_id, name: s.customer_name },
+            onUpdated: (next) => {
+              if (descCell) descCell.textContent = truncateDescription(next || '');
+            },
+          });
+        });
         tbody.appendChild(tr);
       });
-      setStatus('Rapor yüklendi.');
+      if (!silent) setStatus('Rapor yüklendi.');
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     }
+    setTimeout(ensureLayoutFits, 0);
   }
 
   // ------------------- Settings -------------------
@@ -974,6 +1616,13 @@
     renderDetailTab();
     renderReportTab();
     loadCustomers();
+    startAutoRefresh();
+    window.addEventListener('resize', () => setTimeout(ensureLayoutFits, 0));
+    window.addEventListener('focus', () => autoRefreshTick());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) autoRefreshTick();
+    });
+    setTimeout(ensureLayoutFits, 0);
   }
 
   document.addEventListener('DOMContentLoaded', init);

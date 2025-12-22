@@ -207,11 +207,96 @@ class Pusula_Lite_API {
 
 	public function render_shortcode() {
 		if ( ! is_user_logged_in() ) {
-			return '<p>Bu sayfayı görmek için giriş yapmalısınız.</p>';
+			wp_enqueue_style( 'pusula-lite-app' );
+
+			$error    = '';
+			$redirect = home_url( wp_unslash( $_SERVER['REQUEST_URI'] ) );
+
+			if ( isset( $_POST['pusula_login'] ) ) {
+				$nonce_ok = isset( $_POST['pusula_login_nonce'] ) && wp_verify_nonce(
+					sanitize_text_field( wp_unslash( $_POST['pusula_login_nonce'] ) ),
+					'pusula_login'
+				);
+
+				if ( ! $nonce_ok ) {
+					$error = 'Güvenlik doğrulaması başarısız. Lütfen sayfayı yenileyip tekrar deneyin.';
+				} else {
+					$user_login = isset( $_POST['log'] ) ? sanitize_user( wp_unslash( $_POST['log'] ) ) : '';
+					$user_pass  = isset( $_POST['pwd'] ) ? (string) wp_unslash( $_POST['pwd'] ) : '';
+					$remember   = ! empty( $_POST['rememberme'] );
+
+					$user = wp_signon(
+						array(
+							'user_login'    => $user_login,
+							'user_password' => $user_pass,
+							'remember'      => $remember,
+						),
+						is_ssl()
+					);
+
+					if ( is_wp_error( $user ) ) {
+						$code = $user->get_error_code();
+						switch ( $code ) {
+							case 'empty_username':
+								$error = 'Kullanıcı adı zorunludur.';
+								break;
+							case 'empty_password':
+								$error = 'Şifre zorunludur.';
+								break;
+							case 'invalid_username':
+								$error = 'Kullanıcı adı bulunamadı.';
+								break;
+							case 'incorrect_password':
+								$error = 'Şifre hatalı.';
+								break;
+							default:
+								$error = 'Giriş yapılamadı. Lütfen bilgilerinizi kontrol edin.';
+								break;
+						}
+					} else {
+						wp_safe_redirect( $redirect );
+						exit;
+					}
+				}
+			}
+
+			ob_start();
+			?>
+			<div class="pusula-app pusula-login">
+				<div class="pusula-login-card">
+					<div class="pusula-login-title">Pusula</div>
+					<div class="pusula-login-subtitle">Devam etmek için giriş yapın.</div>
+					<?php if ( $error ) : ?>
+						<div class="pusula-login-error"><?php echo esc_html( $error ); ?></div>
+					<?php endif; ?>
+					<form method="post" autocomplete="on">
+						<?php echo wp_nonce_field( 'pusula_login', 'pusula_login_nonce', true, false ); ?>
+						<input type="hidden" name="redirect_to" value="<?php echo esc_url( $redirect ); ?>">
+						<label class="pusula-login-field">
+							<span>Kullanıcı adı</span>
+							<input type="text" name="log" autocomplete="username" required>
+						</label>
+						<label class="pusula-login-field">
+							<span>Şifre</span>
+							<input type="password" name="pwd" autocomplete="current-password" required>
+						</label>
+						<label class="pusula-login-remember">
+							<input type="checkbox" name="rememberme" value="forever">
+							<span>Beni hatırla</span>
+						</label>
+						<div class="pusula-actions pusula-login-actions">
+							<button type="submit" name="pusula_login" value="1">GİRİŞ YAP</button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<?php
+			return ob_get_clean();
 		}
 		$current = wp_get_current_user();
 		if ( ! in_array( self::ROLE, (array) $current->roles, true ) && ! current_user_can( 'administrator' ) ) {
-			return '<p>Bu sayfayı görme yetkiniz yok.</p>';
+			wp_enqueue_style( 'pusula-lite-app' );
+			return '<div class="pusula-app pusula-login"><div class="pusula-login-card"><div class="pusula-login-error">Bu sayfayı görme yetkiniz yok.</div></div></div>';
 		}
 
 		wp_enqueue_style( 'pusula-lite-app' );
@@ -240,10 +325,9 @@ class Pusula_Lite_API {
 		<div id="pusula-lite-app" class="pusula-app">
 			<div class="pusula-header">
 				<div class="pusula-title-tabs">
-					<h1>Pusula Lite</h1>
 					<div class="pusula-tabs">
 						<button class="active" data-tab="search">MÜŞTERİ ARAMA</button>
-						<button data-tab="add">MÜŞTERİ TANITIM BİLGİLERİ</button>
+						<button data-tab="add">MÜŞTERİ BİLGİLERİ</button>
 						<button data-tab="sale">SATIŞ KAYDET</button>
 						<button data-tab="detail">TAKSİTLİ SATIŞ KAYIT BİLGİSİ</button>
 						<button data-tab="report">GÜNLÜK SATIŞ RAPORU</button>
@@ -289,6 +373,17 @@ class Pusula_Lite_API {
 					'limit'  => array( 'sanitize_callback' => 'absint' ),
 					'offset' => array( 'sanitize_callback' => 'absint' ),
 				),
+			)
+		);
+
+		// Next customer id (max + 1)
+		register_rest_route(
+			$namespace,
+			'/customers/next-id',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_next_customer_id' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
 			)
 		);
 
@@ -486,6 +581,17 @@ class Pusula_Lite_API {
 	// ---------------------------------------------------------------------
 	// Customers
 	// ---------------------------------------------------------------------
+	public function get_next_customer_id( WP_REST_Request $request ) {
+		global $wpdb;
+		$table = $this->get_table( 'customers' );
+		$max   = (int) $wpdb->get_var( "SELECT MAX(id) FROM {$table}" );
+		return rest_ensure_response(
+			array(
+				'next_id' => $max + 1,
+			)
+		);
+	}
+
 	public function get_customers( WP_REST_Request $request ) {
 		global $wpdb;
 		$table  = $this->get_table( 'customers' );
