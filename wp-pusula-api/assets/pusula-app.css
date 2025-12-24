@@ -413,6 +413,11 @@ html, body {
   color: #ffb454;
   font-weight: 700;
 }
+.pusula-table tr.paid-today td {
+  color: #8fc48f;
+  font-weight: 700;
+  text-decoration: line-through;
+}
 .pusula-table tr:hover {
   background: #223042;
 }
@@ -805,6 +810,43 @@ html, body {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+  --exp-control-height: calc(1em + 16px);
+}
+#pusula-tab-expected .pusula-grid {
+  align-items: end;
+}
+#pusula-tab-expected .pusula-grid .pusula-actions {
+  margin-top: 0;
+  align-self: end;
+}
+#pusula-tab-expected .pusula-input input {
+  height: var(--exp-control-height);
+  box-sizing: border-box;
+}
+#pusula-tab-expected #exp-run {
+  height: var(--exp-control-height);
+  box-sizing: border-box;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+}
+#pusula-tab-expected #exp-quick {
+  align-items: center;
+}
+#pusula-tab-expected #exp-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+#pusula-tab-expected .pusula-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #c0cad8;
+  font-size: 13px;
+}
+#pusula-tab-expected .pusula-check input {
+  margin: 0;
 }
 .report-quick-actions {
   margin-top: 0;

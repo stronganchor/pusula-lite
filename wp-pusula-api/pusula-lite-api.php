@@ -18,6 +18,7 @@ class Pusula_Lite_API {
 
 	/** @var Pusula_Lite_API|null */
 	private static $instance = null;
+	private $installments_has_paid_date = null;
 
 	public static function init() {
 		if ( null === self::$instance ) {
@@ -77,6 +78,7 @@ class Pusula_Lite_API {
 			due_date DATE,
 			amount DECIMAL(10,2),
 			paid TINYINT(1) DEFAULT 0,
+			paid_date DATE,
 			PRIMARY KEY (id),
 			KEY sale_idx (sale_id)
 		) {$charset_collate};";
@@ -595,6 +597,32 @@ class Pusula_Lite_API {
 		return $wpdb->prefix . 'pusula_' . $suffix;
 	}
 
+	private function installments_has_paid_date() {
+		if ( null !== $this->installments_has_paid_date ) {
+			return $this->installments_has_paid_date;
+		}
+		global $wpdb;
+		$table  = $this->get_table( 'installments' );
+		$column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$table} LIKE %s", 'paid_date' ) );
+		$this->installments_has_paid_date = ! empty( $column );
+		return $this->installments_has_paid_date;
+	}
+
+	private function ensure_installments_paid_date_column() {
+		if ( $this->installments_has_paid_date() ) {
+			return true;
+		}
+		global $wpdb;
+		$table = $this->get_table( 'installments' );
+		$wpdb->query( "ALTER TABLE {$table} ADD COLUMN paid_date DATE NULL" );
+		if ( $wpdb->last_error ) {
+			$this->installments_has_paid_date = null;
+			return $this->installments_has_paid_date();
+		}
+		$this->installments_has_paid_date = true;
+		return true;
+	}
+
 	// ---------------------------------------------------------------------
 	// Customers
 	// ---------------------------------------------------------------------
@@ -960,8 +988,17 @@ class Pusula_Lite_API {
 		$start = $request->get_param( 'start' );
 		$end   = $request->get_param( 'end' );
 
-		$where  = array( 'i.paid = 0', 'i.due_date IS NOT NULL' );
-		$params = array();
+		$today         = current_time( 'Y-m-d' );
+		$has_paid_date = $this->ensure_installments_paid_date_column();
+		if ( $has_paid_date ) {
+			$where            = array( 'i.due_date IS NOT NULL', '(COALESCE(i.paid, 0) = 0 OR (i.paid = 1 AND i.paid_date = %s))' );
+			$params           = array( $today );
+			$paid_date_select = 'i.paid_date';
+		} else {
+			$where            = array( 'i.due_date IS NOT NULL', 'COALESCE(i.paid, 0) = 0' );
+			$params           = array();
+			$paid_date_select = 'NULL AS paid_date';
+		}
 
 		if ( $start ) {
 			$where[]  = 'i.due_date >= %s';
@@ -977,6 +1014,7 @@ class Pusula_Lite_API {
 				i.due_date,
 				i.amount,
 				i.paid,
+				{$paid_date_select},
 				s.id AS sale_id,
 				s.date AS sale_date,
 				s.total AS sale_total,
@@ -1132,24 +1170,27 @@ class Pusula_Lite_API {
 	public function create_installment( WP_REST_Request $request ) {
 		global $wpdb;
 		$table = $this->get_table( 'installments' );
+		$has_paid_date = $this->ensure_installments_paid_date_column();
 
 		$sale_id = absint( $request->get_param( 'sale_id' ) );
 		if ( ! $sale_id ) {
 			return new WP_Error( 'missing_sale', 'Satış numarası zorunludur.', array( 'status' => 400 ) );
 		}
 
+		$paid = (int) $request->get_param( 'paid' );
 		$data = array(
 			'sale_id'  => $sale_id,
 			'due_date' => $request->get_param( 'due_date' ) ? sanitize_text_field( $request->get_param( 'due_date' ) ) : null,
 			'amount'   => $request->get_param( 'amount' ),
-			'paid'     => (int) $request->get_param( 'paid' ),
+			'paid'     => $paid,
 		);
+		$formats = array( '%d', '%s', '%f', '%d' );
+		if ( $paid && $has_paid_date ) {
+			$data['paid_date'] = current_time( 'Y-m-d' );
+			$formats[]         = '%s';
+		}
 
-		$wpdb->insert(
-			$table,
-			$data,
-			array( '%d', '%s', '%f', '%d' )
-		);
+		$wpdb->insert( $table, $data, $formats );
 
 		return rest_ensure_response( array( 'id' => $wpdb->insert_id ) );
 	}
@@ -1158,8 +1199,13 @@ class Pusula_Lite_API {
 		global $wpdb;
 		$table = $this->get_table( 'installments' );
 		$id    = absint( $request['id'] );
+		$has_paid_date = $this->ensure_installments_paid_date_column();
 
-		$existing = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE id = %d", $id ) );
+		$select_fields = $has_paid_date ? 'id, paid, paid_date' : 'id, paid';
+		$existing = $wpdb->get_row(
+			$wpdb->prepare( "SELECT {$select_fields} FROM {$table} WHERE id = %d", $id ),
+			ARRAY_A
+		);
 		if ( ! $existing ) {
 			return new WP_Error( 'not_found', 'Taksit bulunamadı.', array( 'status' => 404 ) );
 		}
@@ -1177,8 +1223,21 @@ class Pusula_Lite_API {
 			$formats[]      = '%f';
 		}
 		if ( $request->has_param( 'paid' ) ) {
-			$data['paid'] = (int) $request->get_param( 'paid' );
+			$paid         = (int) $request->get_param( 'paid' );
+			$data['paid'] = $paid;
 			$formats[]    = '%d';
+			if ( $has_paid_date ) {
+				if ( $paid ) {
+					$paid_date = $existing['paid_date'] ?? null;
+					if ( empty( $paid_date ) || (int) $existing['paid'] !== 1 ) {
+						$paid_date = current_time( 'Y-m-d' );
+					}
+					$data['paid_date'] = $paid_date;
+				} else {
+					$data['paid_date'] = null;
+				}
+				$formats[] = '%s';
+			}
 		}
 
 		if ( empty( $data ) ) {

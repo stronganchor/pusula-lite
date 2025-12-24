@@ -13,6 +13,7 @@
     sales: [],
     reportSales: [],
     expectedPayments: [],
+    currentExpected: null,
   };
 
   const apiBase = (window.PusulaApp && PusulaApp.apiBase) || '';
@@ -639,6 +640,13 @@
     const rows = await api(`/customers?id=${encodeURIComponent(id)}&limit=1`);
     if (rows && rows[0]) return rows[0];
     return null;
+  }
+
+  async function fetchSalesForCustomer(customerId) {
+    const id = Number(customerId);
+    if (!Number.isFinite(id) || id < 1) return [];
+    const rows = await api(`/sales?customer_id=${encodeURIComponent(id)}&with=installments`);
+    return rows || [];
   }
 
   function enableNav(enabled) {
@@ -1498,9 +1506,10 @@
     return months[idx] || '';
   }
 
-  function collectPaidInstallmentsForMonth(year, month1to12) {
+  function collectPaidInstallmentsForMonth(year, month1to12, salesList = null) {
     const items = [];
-    (state.sales || []).forEach((sale) => {
+    const sales = Array.isArray(salesList) ? salesList : (state.sales || []);
+    sales.forEach((sale) => {
       (sale.installments || []).forEach((inst) => {
         if (!isPaid(inst.paid)) return;
         const dt = parseISODate(inst.due_date);
@@ -1532,7 +1541,7 @@
     return items;
   }
 
-  function printPaymentReceiptForMonth(customer, year, month1to12) {
+  function printPaymentReceiptForMonth(customer, year, month1to12, salesList = null, fallbackInst = null) {
     if (!customer) return;
     const company = {
       name: 'ENES BEKO',
@@ -1542,7 +1551,14 @@
       footerSub: 'ENES EFY KARDEŞLER',
     };
 
-    const items = collectPaidInstallmentsForMonth(year, month1to12);
+    const items = collectPaidInstallmentsForMonth(year, month1to12, salesList);
+    if (!items.length && fallbackInst && isPaid(fallbackInst.paid)) {
+      items.push({
+        due_date: fallbackInst.due_date,
+        amount: Number(fallbackInst.amount || 0),
+        sale_id: fallbackInst.sale_id || (state.currentSale && state.currentSale.id),
+      });
+    }
     if (!items.length && state.currentInstallment && isPaid(state.currentInstallment.paid)) {
       items.push({
         due_date: state.currentInstallment.due_date,
@@ -2019,9 +2035,20 @@
       <div class="pusula-grid">
         <label class="pusula-input"><span>Vade Başlangıç</span><input type="text" id="exp-start" placeholder="GG-AA-YYYY"></label>
         <label class="pusula-input"><span>Vade Bitiş</span><input type="text" id="exp-end" placeholder="GG-AA-YYYY"></label>
-        <div class="pusula-actions"><button id="exp-run">Listele</button></div>
+        <div class="pusula-actions"><button id="exp-run">LİSTELE</button></div>
+      </div>
+      <div class="pusula-actions report-quick-actions" id="exp-quick">
+        <button type="button" class="secondary" data-range="all">TÜMÜ</button>
+        <button type="button" class="secondary" data-range="this-month">BU AY</button>
+        <button type="button" class="secondary" data-range="next-month">GELECEK AY</button>
+        <label class="pusula-check"><input type="checkbox" id="exp-hide-late"><span>Gecikmiş ödemeleri gizle</span></label>
       </div>
       <div class="pusula-summary"><span id="exp-total">0,00₺</span> — <span id="exp-count">0</span> taksit</div>
+      <div class="pusula-actions expected-actions">
+        <button id="exp-mark-paid" disabled>ÖDENDİ İŞARETLE</button>
+        <button id="exp-mark-unpaid" disabled>ÖDENMEDİ İŞARETLE</button>
+        <button id="exp-print" disabled>Makbuz Yazdır</button>
+      </div>
       <div class="pusula-table-wrapper">
         <table class="pusula-table" id="exp-table">
           <thead>
@@ -2043,7 +2070,258 @@
       </div>
     `;
     root.querySelector('#exp-run').addEventListener('click', () => loadExpectedPayments());
+    root.querySelector('#exp-hide-late').addEventListener('change', () => renderExpectedPaymentsTable());
+    root.querySelector('#exp-start').addEventListener('input', () => {
+      const changed = updateExpectedHideLateState();
+      if (changed) renderExpectedPaymentsTable();
+    });
+    root.querySelector('#exp-mark-paid').addEventListener('click', markExpectedPaymentPaid);
+    root.querySelector('#exp-mark-unpaid').addEventListener('click', markExpectedPaymentUnpaid);
+    root.querySelector('#exp-print').addEventListener('click', () => printExpectedPaymentReceipt());
+    root.querySelectorAll('#exp-quick [data-range]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const range = btn.getAttribute('data-range');
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (range === 'all') {
+          const startEl = document.getElementById('exp-start');
+          const endEl = document.getElementById('exp-end');
+          if (startEl) startEl.value = '';
+          if (endEl) endEl.value = '';
+          const hideEl = document.getElementById('exp-hide-late');
+          if (hideEl) hideEl.checked = false;
+          updateExpectedHideLateState();
+          loadExpectedPayments();
+          return;
+        }
+        if (range === 'this-month') {
+          const start = new Date(today.getFullYear(), today.getMonth(), 1);
+          const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+          setExpectedRange(start, end);
+          return;
+        }
+        if (range === 'next-month') {
+          const start = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+          const end = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+          setExpectedRange(start, end);
+        }
+      });
+    });
+    updateExpectedHideLateState();
     setTimeout(ensureLayoutFits, 0);
+  }
+
+  function setExpectedRange(startDate, endDate) {
+    const startEl = document.getElementById('exp-start');
+    const endEl = document.getElementById('exp-end');
+    if (!startEl || !endEl) return;
+    startEl.value = fromISO(formatISODate(startDate));
+    endEl.value = fromISO(formatISODate(endDate));
+    updateExpectedHideLateState();
+    loadExpectedPayments();
+  }
+
+  function updateExpectedHideLateState() {
+    const hideEl = document.getElementById('exp-hide-late');
+    const startEl = document.getElementById('exp-start');
+    if (!hideEl || !startEl) return false;
+    const todayISO = formatISODate(new Date());
+    const startIso = toISO(startEl.value.trim());
+    const shouldDisable = Boolean(startIso) && startIso >= todayISO;
+    let changed = false;
+    if (shouldDisable && !hideEl.disabled) {
+      hideEl.disabled = true;
+      changed = true;
+    } else if (!shouldDisable && hideEl.disabled) {
+      hideEl.disabled = false;
+    }
+    if (shouldDisable && hideEl.checked) {
+      hideEl.checked = false;
+      changed = true;
+    }
+    return changed;
+  }
+
+  function renderExpectedPaymentsTable() {
+    const tbody = document.querySelector('#exp-table tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    state.currentExpected = null;
+    const markPaidBtn = document.getElementById('exp-mark-paid');
+    const markUnpaidBtn = document.getElementById('exp-mark-unpaid');
+    const printBtn = document.getElementById('exp-print');
+    if (markPaidBtn) markPaidBtn.disabled = true;
+    if (markUnpaidBtn) markUnpaidBtn.disabled = true;
+    if (printBtn) printBtn.disabled = true;
+    const hideLate = Boolean(document.getElementById('exp-hide-late')?.checked);
+    const todayISO = formatISODate(new Date());
+    const lateCustomers = new Set();
+    state.expectedPayments.forEach((row) => {
+      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
+      const isPaidToday = isPaid(row && row.paid) && paidDate === todayISO;
+      if (row && row.due_date && row.due_date < todayISO && !isPaidToday) {
+        lateCustomers.add(String(row.customer_id || ''));
+      }
+    });
+    const visibleRows = state.expectedPayments.filter((row) => {
+      const isLatePayment = row && row.due_date && row.due_date < todayISO;
+      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
+      const isPaidToday = isPaid(row && row.paid) && paidDate === todayISO;
+      return !(hideLate && isLatePayment && !isPaidToday);
+    });
+    const total = visibleRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const totalEl = document.getElementById('exp-total');
+    const countEl = document.getElementById('exp-count');
+    if (totalEl) totalEl.textContent = formatMoney(total);
+    if (countEl) countEl.textContent = visibleRows.length;
+    visibleRows.forEach((row) => {
+      const tr = document.createElement('tr');
+      const due = row && row.due_date ? fromISO(row.due_date) : '';
+      const saleDate = row && row.sale_date ? fromISO(row.sale_date) : '';
+      const amount = formatMoney(row && row.amount ? row.amount : 0);
+      const saleTotal = formatMoney(row && row.sale_total ? row.sale_total : 0);
+      const desc = truncateDescription(row && row.sale_description ? row.sale_description : '');
+      const address = [row && row.customer_address ? row.customer_address : '', row && row.customer_work_address ? row.customer_work_address : '']
+        .filter(Boolean)
+        .join(' / ');
+      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
+      const isPaidRow = isPaid(row && row.paid);
+      const isPaidToday = isPaidRow && paidDate === todayISO;
+      tr.innerHTML = `
+        <td>${due}</td>
+        <td>${amount}</td>
+        <td>${row && row.customer_id ? row.customer_id : ''}</td>
+        <td>${row && row.customer_name ? row.customer_name : ''}</td>
+        <td>${row && row.customer_phone ? row.customer_phone : ''}</td>
+        <td>${address}</td>
+        <td>${row && row.sale_id ? row.sale_id : ''}</td>
+        <td>${saleDate}</td>
+        <td>${saleTotal}</td>
+        <td>${desc}</td>
+      `;
+      const isLatePayment = row && row.due_date && row.due_date < todayISO;
+      if (isPaidToday) {
+        tr.classList.add('paid-today');
+      } else if (isLatePayment || lateCustomers.has(String(row && row.customer_id ? row.customer_id : ''))) {
+        tr.classList.add('late');
+      }
+      tr.addEventListener('click', () => {
+        state.currentExpected = row;
+        tbody.querySelectorAll('tr').forEach((r) => r.classList.remove('selected'));
+        tr.classList.add('selected');
+        if (markPaidBtn) markPaidBtn.disabled = isPaidRow;
+        if (markUnpaidBtn) markUnpaidBtn.disabled = !isPaidToday;
+        if (printBtn) printBtn.disabled = !isPaidRow;
+      });
+      tr.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        openExpectedCustomerDetail(row);
+      });
+      tbody.appendChild(tr);
+    });
+    if (!visibleRows.length) {
+      const tr = document.createElement('tr');
+      tr.className = 'pusula-empty-row';
+      tr.innerHTML = '<td colspan="10" class="pusula-empty-cell">Beklenen ödeme bulunamadı.</td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  function openExpectedCustomerDetail(row) {
+    if (!row || !row.customer_id) return;
+    const cust = {
+      id: row.customer_id,
+      name: row.customer_name || '',
+      phone: row.customer_phone || '',
+      address: row.customer_address || '',
+      work_address: row.customer_work_address || '',
+    };
+    state.selected = cust;
+    updateDetail(cust);
+    fillSaleCustomer(cust);
+    activateTab('detail');
+    loadSales(row.customer_id, row.sale_id || null);
+  }
+
+  async function printExpectedPaymentReceipt(row) {
+    const target = row || state.currentExpected;
+    if (!target || !isPaid(target.paid)) return;
+    const dt = parseISODate(target.due_date);
+    if (!dt) {
+      setStatus('Hata: Taksit tarihi bulunamadı.', true);
+      return;
+    }
+    const cust = {
+      id: target.customer_id,
+      name: target.customer_name || '',
+      address: target.customer_address || '',
+    };
+    try {
+      const sales = await fetchSalesForCustomer(target.customer_id);
+      printPaymentReceiptForMonth(
+        cust,
+        dt.getFullYear(),
+        dt.getMonth() + 1,
+        sales,
+        target
+      );
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    }
+  }
+
+  async function markExpectedPaymentPaid() {
+    if (!state.currentExpected || !state.currentExpected.installment_id) return;
+    const instId = state.currentExpected.installment_id;
+    try {
+      setExpectedLoading(true);
+      await api(`/installments/${instId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ paid: 1 }),
+      });
+      setStatus('Ödeme güncellendi.');
+      const todayISO = formatISODate(new Date());
+      const updatedRow = { ...state.currentExpected, paid: 1, paid_date: todayISO };
+      state.expectedPayments = (state.expectedPayments || []).map((row) => {
+        if (String(row.installment_id) !== String(instId)) return row;
+        return { ...row, paid: 1, paid_date: todayISO };
+      });
+      state.currentExpected = null;
+      renderExpectedPaymentsTable();
+      if (window.confirm('Makbuz yazdırılsın mı?')) {
+        await printExpectedPaymentReceipt(updatedRow);
+      }
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    } finally {
+      setExpectedLoading(false);
+    }
+  }
+
+  async function markExpectedPaymentUnpaid() {
+    if (!state.currentExpected || !state.currentExpected.installment_id) return;
+    const instId = state.currentExpected.installment_id;
+    const todayISO = formatISODate(new Date());
+    const paidDate = state.currentExpected.paid_date ? String(state.currentExpected.paid_date) : '';
+    if (!isPaid(state.currentExpected.paid) || paidDate !== todayISO) return;
+    try {
+      setExpectedLoading(true);
+      await api(`/installments/${instId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ paid: 0 }),
+      });
+      setStatus('Ödeme güncellendi.');
+      state.expectedPayments = (state.expectedPayments || []).map((row) => {
+        if (String(row.installment_id) !== String(instId)) return row;
+        return { ...row, paid: 0, paid_date: null };
+      });
+      state.currentExpected = null;
+      renderExpectedPaymentsTable();
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    } finally {
+      setExpectedLoading(false);
+    }
   }
 
   async function loadExpectedPayments({ silent = false, showLoading = true } = {}) {
@@ -2060,60 +2338,12 @@
       if (showLoading) setExpectedLoading(true);
       const rows = await api(`/expected-payments${query.toString() ? `?${query.toString()}` : ''}`);
       state.expectedPayments = rows || [];
-      const total = state.expectedPayments.reduce((sum, r) => sum + Number(r.amount || 0), 0);
-      const totalEl = document.getElementById('exp-total');
-      const countEl = document.getElementById('exp-count');
-      if (totalEl) totalEl.textContent = formatMoney(total);
-      if (countEl) countEl.textContent = state.expectedPayments.length;
-      const tbody = document.querySelector('#exp-table tbody');
-      if (!tbody) return;
-      tbody.innerHTML = '';
-      const todayISO = formatISODate(new Date());
-      const lateCustomers = new Set();
-      state.expectedPayments.forEach((row) => {
-        if (row && row.due_date && row.due_date < todayISO) {
-          lateCustomers.add(String(row.customer_id || ''));
-        }
-      });
-      state.expectedPayments.forEach((row) => {
-        const tr = document.createElement('tr');
-        const due = row && row.due_date ? fromISO(row.due_date) : '';
-        const saleDate = row && row.sale_date ? fromISO(row.sale_date) : '';
-        const amount = formatMoney(row && row.amount ? row.amount : 0);
-        const saleTotal = formatMoney(row && row.sale_total ? row.sale_total : 0);
-        const desc = truncateDescription(row && row.sale_description ? row.sale_description : '');
-        const address = [row && row.customer_address ? row.customer_address : '', row && row.customer_work_address ? row.customer_work_address : '']
-          .filter(Boolean)
-          .join(' / ');
-        tr.innerHTML = `
-          <td>${due}</td>
-          <td>${amount}</td>
-          <td>${row && row.customer_id ? row.customer_id : ''}</td>
-          <td>${row && row.customer_name ? row.customer_name : ''}</td>
-          <td>${row && row.customer_phone ? row.customer_phone : ''}</td>
-          <td>${address}</td>
-          <td>${row && row.sale_id ? row.sale_id : ''}</td>
-          <td>${saleDate}</td>
-          <td>${saleTotal}</td>
-          <td>${desc}</td>
-        `;
-        const isLatePayment = row && row.due_date && row.due_date < todayISO;
-        if (isLatePayment || lateCustomers.has(String(row && row.customer_id ? row.customer_id : ''))) {
-          tr.classList.add('late');
-        }
-        tbody.appendChild(tr);
-      });
-      if (!state.expectedPayments.length) {
-        const tr = document.createElement('tr');
-        tr.className = 'pusula-empty-row';
-        tr.innerHTML = '<td colspan="10" class="pusula-empty-cell">Beklenen ödeme bulunamadı.</td>';
-        tbody.appendChild(tr);
-      }
+      renderExpectedPaymentsTable();
       if (!silent) setStatus('Beklenen ödemeler yüklendi.');
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
-      setExpectedLoading(false);
+      if (showLoading) setExpectedLoading(false);
     }
     setTimeout(ensureLayoutFits, 0);
   }
