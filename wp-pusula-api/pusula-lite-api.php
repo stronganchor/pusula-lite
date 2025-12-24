@@ -331,6 +331,7 @@ class Pusula_Lite_API {
 						<button data-tab="sale">SATIŞ KAYDET</button>
 						<button data-tab="detail">TAKSİTLİ SATIŞ KAYIT BİLGİSİ</button>
 						<button data-tab="report">GÜNLÜK SATIŞ RAPORU</button>
+						<button data-tab="expected">BEKLENEN ÖDEMELER</button>
 					</div>
 				</div>
 				<div class="pusula-status" id="pusula-status"></div>
@@ -340,6 +341,7 @@ class Pusula_Lite_API {
 			<div class="pusula-tab-content" id="pusula-tab-sale" style="display:none"></div>
 			<div class="pusula-tab-content" id="pusula-tab-detail" style="display:none"></div>
 			<div class="pusula-tab-content" id="pusula-tab-report" style="display:none"></div>
+			<div class="pusula-tab-content" id="pusula-tab-expected" style="display:none"></div>
 		</div>
 		<?php
 		return ob_get_clean();
@@ -503,6 +505,21 @@ class Pusula_Lite_API {
 			)
 		);
 
+		// Expected payments (beklenen ödemeler)
+		register_rest_route(
+			$namespace,
+			'/expected-payments',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_expected_payments' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+				'args'                => array(
+					'start' => array( 'sanitize_callback' => 'sanitize_text_field' ),
+					'end'   => array( 'sanitize_callback' => 'sanitize_text_field' ),
+				),
+			)
+		);
+
 		// Installments (taksit)
 		register_rest_route(
 			$namespace,
@@ -598,6 +615,7 @@ class Pusula_Lite_API {
 		$search = $request->get_param( 'search' );
 		$with   = $request->get_param( 'with' );
 		$with_contacts = $with && false !== strpos( $with, 'contacts' );
+		$with_late = $with && false !== strpos( $with, 'late_unpaid' );
 		$id     = absint( $request->get_param( 'id' ) );
 		$name   = $request->get_param( 'name' );
 		$phone  = $request->get_param( 'phone' );
@@ -655,6 +673,37 @@ class Pusula_Lite_API {
 			$contacts = $this->get_contacts_for_customers( $ids );
 			foreach ( $rows as &$row ) {
 				$row['contacts'] = $contacts[ $row['id'] ] ?? array();
+			}
+			unset( $row );
+		}
+		if ( $with_late && $rows ) {
+			$ids = array_map( 'intval', wp_list_pluck( $rows, 'id' ) );
+			$ids = array_values( array_filter( $ids ) );
+			$late_lookup = array();
+			if ( $ids ) {
+				$sales_table = $this->get_table( 'sales' );
+				$inst_table  = $this->get_table( 'installments' );
+				$today       = current_time( 'Y-m-d' );
+				$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+				$params = array_merge( $ids, array( $today ) );
+				$late_ids = $wpdb->get_col(
+					$wpdb->prepare(
+						"SELECT DISTINCT s.customer_id
+						 FROM {$sales_table} s
+						 INNER JOIN {$inst_table} i ON i.sale_id = s.id
+						 WHERE s.customer_id IN ({$placeholders})
+						   AND i.paid = 0
+						   AND i.due_date IS NOT NULL
+						   AND i.due_date < %s",
+						$params
+					)
+				);
+				if ( $late_ids ) {
+					$late_lookup = array_fill_keys( array_map( 'intval', $late_ids ), true );
+				}
+			}
+			foreach ( $rows as &$row ) {
+				$row['late_unpaid'] = ! empty( $late_lookup[ (int) $row['id'] ] ) ? 1 : 0;
 			}
 			unset( $row );
 		}
@@ -895,6 +944,62 @@ class Pusula_Lite_API {
 			}
 			foreach ( $rows as &$row ) {
 				$row['installments'] = $grouped[ $row['id'] ] ?? array();
+			}
+			unset( $row );
+		}
+
+		return rest_ensure_response( $rows );
+	}
+
+	public function get_expected_payments( WP_REST_Request $request ) {
+		global $wpdb;
+		$sales_table = $this->get_table( 'sales' );
+		$inst_table  = $this->get_table( 'installments' );
+		$cust_table  = $this->get_table( 'customers' );
+
+		$start = $request->get_param( 'start' );
+		$end   = $request->get_param( 'end' );
+
+		$where  = array( 'i.paid = 0', 'i.due_date IS NOT NULL' );
+		$params = array();
+
+		if ( $start ) {
+			$where[]  = 'i.due_date >= %s';
+			$params[] = sanitize_text_field( $start );
+		}
+		if ( $end ) {
+			$where[]  = 'i.due_date <= %s';
+			$params[] = sanitize_text_field( $end );
+		}
+
+		$sql = "SELECT
+				i.id AS installment_id,
+				i.due_date,
+				i.amount,
+				i.paid,
+				s.id AS sale_id,
+				s.date AS sale_date,
+				s.total AS sale_total,
+				s.description AS sale_description,
+				c.id AS customer_id,
+				c.name AS customer_name,
+				c.phone AS customer_phone,
+				c.address AS customer_address,
+				c.work_address AS customer_work_address
+			FROM {$inst_table} i
+			INNER JOIN {$sales_table} s ON s.id = i.sale_id
+			INNER JOIN {$cust_table} c ON c.id = s.customer_id
+			WHERE " . implode( ' AND ', $where ) . '
+			ORDER BY i.due_date ASC, i.id ASC';
+
+		if ( $params ) {
+			$sql = $wpdb->prepare( $sql, $params );
+		}
+
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+		if ( $rows ) {
+			foreach ( $rows as &$row ) {
+				$row['paid'] = (int) $row['paid'];
 			}
 			unset( $row );
 		}

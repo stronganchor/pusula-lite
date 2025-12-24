@@ -800,6 +800,12 @@ html, body {
   gap: 10px;
   overflow: hidden;
 }
+#pusula-tab-expected {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
 .report-quick-actions {
   margin-top: 0;
 }
