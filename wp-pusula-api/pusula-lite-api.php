@@ -380,7 +380,7 @@ class Pusula_Lite_API {
 			)
 		);
 
-		// Next customer id (max + 1)
+		// Next customer id (lowest available)
 		register_rest_route(
 			$namespace,
 			'/customers/next-id',
@@ -626,13 +626,29 @@ class Pusula_Lite_API {
 	// ---------------------------------------------------------------------
 	// Customers
 	// ---------------------------------------------------------------------
-	public function get_next_customer_id( WP_REST_Request $request ) {
+	private function get_lowest_available_customer_id() {
 		global $wpdb;
 		$table = $this->get_table( 'customers' );
-		$max   = (int) $wpdb->get_var( "SELECT MAX(id) FROM {$table}" );
+		$has_one = (int) $wpdb->get_var(
+			$wpdb->prepare( "SELECT 1 FROM {$table} WHERE id = %d LIMIT 1", 1 )
+		);
+		if ( ! $has_one ) {
+			return 1;
+		}
+		$next = (int) $wpdb->get_var(
+			"SELECT MIN(t1.id + 1)
+			 FROM {$table} t1
+			 LEFT JOIN {$table} t2 ON t1.id + 1 = t2.id
+			 WHERE t2.id IS NULL"
+		);
+		return $next > 0 ? $next : 1;
+	}
+
+	public function get_next_customer_id( WP_REST_Request $request ) {
+		$next_id = $this->get_lowest_available_customer_id();
 		return rest_ensure_response(
 			array(
-				'next_id' => $max + 1,
+				'next_id' => $next_id,
 			)
 		);
 	}
@@ -762,7 +778,17 @@ class Pusula_Lite_API {
 			return new WP_Error( 'missing_name', 'Müşteri adı zorunludur.', array( 'status' => 400 ) );
 		}
 
+		$requested_id = absint( $request->get_param( 'id' ) );
+		if ( $requested_id ) {
+			$exists = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE id = %d", $requested_id ) );
+			if ( $exists ) {
+				$requested_id = 0;
+			}
+		}
+		$customer_id = $requested_id ? $requested_id : $this->get_lowest_available_customer_id();
+
 		$data = array(
+			'id'                => $customer_id,
 			'name'              => $name,
 			'phone'             => sanitize_text_field( $request->get_param( 'phone' ) ),
 			'address'           => sanitize_text_field( $request->get_param( 'address' ) ),
@@ -771,20 +797,23 @@ class Pusula_Lite_API {
 			'registration_date' => $request->get_param( 'registration_date' ) ? sanitize_text_field( $request->get_param( 'registration_date' ) ) : current_time( 'Y-m-d' ),
 		);
 
-		$wpdb->insert(
+		$inserted = $wpdb->insert(
 			$table,
 			$data,
-			array( '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
+		if ( false === $inserted ) {
+			return new WP_Error( 'insert_failed', 'Müşteri kaydı oluşturulamadı.', array( 'status' => 500 ) );
+		}
 
 		$contacts = $request->get_param( 'contacts' );
 		if ( $contacts ) {
-			$this->store_contacts( $wpdb->insert_id, $contacts );
+			$this->store_contacts( $customer_id, $contacts );
 		}
 
 		return rest_ensure_response(
 			array(
-				'id' => $wpdb->insert_id,
+				'id' => $customer_id,
 			)
 		);
 	}

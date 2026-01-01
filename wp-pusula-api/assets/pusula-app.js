@@ -9,6 +9,7 @@
     autoRefreshHandle: null,
     autoRefreshMs: 15000,
     selected: null,
+    pendingCustomerId: null,
     currentSaleExplicit: false,
     sales: [],
     reportSales: [],
@@ -213,8 +214,24 @@
     const target = document.getElementById(`pusula-tab-${tabName}`);
     if (target) target.style.display = '';
 
-    if (tabName === 'add' && !state.selected && !isAddFormDirty()) {
-      fillCustomerForm();
+    if (tabName === 'add') {
+      if (state.selected) {
+        if (!isAddFormDirty()) fillCustomerForm(state.selected);
+      } else if (!isAddFormDirty()) {
+        fillCustomerForm();
+      }
+    }
+    if (tabName === 'sale') {
+      if (state.selected) fillSaleCustomer(state.selected);
+      else syncSaleCustomerFromPending();
+    }
+    if (tabName === 'detail') {
+      if (state.selected) {
+        updateDetail(state.selected);
+        loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
+      } else {
+        syncDetailFromPending();
+      }
     }
     if (tabName === 'report') {
       loadReport();
@@ -561,6 +578,7 @@
       const isSelected = state.selected && String(state.selected.id) === String(r.id);
       tr.addEventListener('click', () => {
         state.selected = r;
+        state.pendingCustomerId = null;
         fillSaleCustomer(r);
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         tr.classList.add('selected');
@@ -568,6 +586,7 @@
       });
       tr.addEventListener('dblclick', () => {
         state.selected = r;
+        state.pendingCustomerId = null;
         fillSaleCustomer(r);
         updateDetail(r);
         document.querySelector('button[data-tab="detail"]').click();
@@ -579,6 +598,7 @@
       if (isSelected) {
         tr.classList.add('selected');
         state.selected = r;
+        state.pendingCustomerId = null;
         hasSelection = true;
       }
       tbody.appendChild(tr);
@@ -664,6 +684,7 @@
       await api(`/customers/${state.selected.id}`, { method: 'DELETE' });
       setStatus('Müşteri silindi.');
       state.selected = null;
+      state.pendingCustomerId = null;
       updateDetail(null);
       fillCustomerForm();
       enableNav(false);
@@ -757,8 +778,18 @@
     root.querySelector('#cust-save').addEventListener('click', saveCustomer);
     root.querySelector('#cust-clear').addEventListener('click', () => {
       state.selected = null;
+      state.pendingCustomerId = null;
       fillCustomerForm();
     });
+    const custIdInput = root.querySelector('#cust-id');
+    if (custIdInput) {
+      const syncPending = () => {
+        if (state.selected) return;
+        setPendingCustomerId(custIdInput.value.trim());
+      };
+      custIdInput.addEventListener('input', syncPending);
+      custIdInput.addEventListener('blur', syncPending);
+    }
     fillCustomerForm();
   }
 
@@ -790,14 +821,18 @@
       else el.textContent = val || '';
     };
     if (!cust) {
+      state.selected = null;
       ['cust-id','cust-name','cust-phone','cust-address','cust-work','cust-notes','c1-name','c1-phone','c1-home','c1-work','c2-name','c2-phone','c2-home','c2-work'].forEach((id) => set(id, ''));
       const localNext = nextCustomerId();
       set('cust-id', String(localNext));
+      setPendingCustomerId(localNext);
       set('cust-date-label', todayStr());
       set('cust-date-hidden', todayStr());
       refreshNewCustomerIdFromServer(localNext);
       return;
     }
+    state.selected = cust;
+    state.pendingCustomerId = null;
     set('cust-id', cust.id || '');
     set('cust-date-label', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
     set('cust-date-hidden', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
@@ -822,8 +857,42 @@
   function nextCustomerId() {
     const base = state.customerBase && state.customerBase.length ? state.customerBase : state.customers;
     if (!base || !base.length) return 1;
-    const maxId = base.reduce((m, c) => Math.max(m, parseInt(c.id, 10) || 0), 0);
-    return maxId + 1;
+    const ids = new Set(
+      base
+        .map((c) => parseInt(c.id, 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    );
+    let nextId = 1;
+    while (ids.has(nextId)) nextId += 1;
+    return nextId;
+  }
+
+  function setPendingCustomerId(nextId) {
+    if (state.selected) return;
+    const val = String(nextId || '').trim();
+    state.pendingCustomerId = val || null;
+    syncSaleCustomerFromPending();
+    syncDetailFromPending();
+  }
+
+  function syncSaleCustomerFromPending() {
+    if (state.selected) return;
+    const pending = state.pendingCustomerId;
+    if (!pending) return;
+    const idEl = document.getElementById('sale-cust-id');
+    if (idEl) idEl.value = pending;
+    const nameEl = document.getElementById('sale-cust-name');
+    if (nameEl) nameEl.value = '';
+  }
+
+  function syncDetailFromPending() {
+    if (state.selected) return;
+    const pending = state.pendingCustomerId;
+    if (!pending) return;
+    updateDetail({ id: pending });
+    if (getActiveTabName() === 'detail') {
+      renderSalesTable([], { selectedSaleId: null });
+    }
   }
 
   async function refreshNewCustomerIdFromServer(expectedId) {
@@ -839,6 +908,7 @@
       if (!nowEl) return;
       if (nowEl.value.trim() !== before) return;
       nowEl.value = String(nextId);
+      setPendingCustomerId(nextId);
     } catch (e) {
       // ignore (fallback already set)
     }
@@ -870,9 +940,6 @@
     const exists = targetId && state.customers.some((c) => String(c.id) === String(targetId));
     const method = exists ? 'PUT' : 'POST';
     const url = exists ? `/customers/${targetId}` : '/customers';
-    if (!exists) {
-      delete payload.id; // let backend assign id
-    }
     try {
       state.isSavingCustomer = true;
       setStatus('Kaydediliyor...');
@@ -914,6 +981,7 @@
         else state.customerBase.unshift(newCust);
       }
       state.selected = newCust;
+      state.pendingCustomerId = null;
       renderTable(state.customers);
       enableNav(true);
       updateDetail(newCust);
@@ -1027,6 +1095,7 @@
         const cust = await fetchCustomerById(id);
         if (cust) {
           state.selected = cust;
+          state.pendingCustomerId = null;
           fillSaleCustomer(cust);
         } else if (nameEl) {
           nameEl.value = '';
@@ -1036,6 +1105,7 @@
       custIdEl.addEventListener('blur', debouncedLookup);
     }
     updateSalePreview();
+    syncSaleCustomerFromPending();
     setTimeout(ensureLayoutFits, 0);
   }
 
@@ -1060,6 +1130,7 @@
         return;
       }
       state.selected = cust;
+      state.pendingCustomerId = null;
       fillSaleCustomer(cust);
     }
 	    const total = parseFloat(document.getElementById('sale-total').value);
@@ -2237,6 +2308,7 @@
       work_address: row.customer_work_address || '',
     };
     state.selected = cust;
+    state.pendingCustomerId = null;
     updateDetail(cust);
     fillSaleCustomer(cust);
     activateTab('detail');
