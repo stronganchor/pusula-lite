@@ -30,6 +30,8 @@ class Pusula_Lite_API {
 	private function __construct() {
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 		add_action( 'admin_menu', array( $this, 'register_admin_page' ) );
+		add_action( 'admin_post_pusula_export', array( $this, 'handle_export' ) );
+		add_action( 'admin_post_pusula_import', array( $this, 'handle_import' ) );
 		add_shortcode( 'pusula_lite_app', array( $this, 'render_shortcode' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'register_assets' ) );
 	}
@@ -156,6 +158,13 @@ class Pusula_Lite_API {
 			'pusula-lite-api',
 			array( $this, 'render_settings_page' )
 		);
+		add_options_page(
+			'Pusula Backup',
+			'Pusula Backup',
+			'manage_options',
+			'pusula-lite-backup',
+			array( $this, 'render_backup_page' )
+		);
 	}
 
 	public function render_settings_page() {
@@ -181,6 +190,291 @@ class Pusula_Lite_API {
 			</form>
 		</div>
 		<?php
+	}
+
+	// ---------------------------------------------------------------------
+	// Backup / Import
+	// ---------------------------------------------------------------------
+	private function get_backup_page_url() {
+		return admin_url( 'options-general.php?page=pusula-lite-backup' );
+	}
+
+	public function render_backup_page() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		$status  = isset( $_GET['pusula_import'] ) ? sanitize_key( wp_unslash( $_GET['pusula_import'] ) ) : '';
+		$message = isset( $_GET['pusula_message'] ) ? sanitize_text_field( wp_unslash( $_GET['pusula_message'] ) ) : '';
+		$notice = '';
+		$notice_class = '';
+
+		if ( 'success' === $status ) {
+			$notice = $message ? $message : 'Import completed. Existing data was replaced.';
+			$notice_class = 'notice-success';
+		} elseif ( 'error' === $status ) {
+			$notice = $message ? $message : 'Import failed. Please check the file and try again.';
+			$notice_class = 'notice-error';
+		}
+		?>
+		<div class="wrap">
+			<h1>Pusula Backup</h1>
+			<?php if ( $notice ) : ?>
+				<div class="notice <?php echo esc_attr( $notice_class ); ?> is-dismissible"><p><?php echo esc_html( $notice ); ?></p></div>
+			<?php endif; ?>
+
+			<h2>Export</h2>
+			<p>Download a JSON backup of all Pusula tables. Use this file to restore or migrate data to another site.</p>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<?php wp_nonce_field( 'pusula_export', 'pusula_export_nonce' ); ?>
+				<input type="hidden" name="action" value="pusula_export">
+				<button type="submit" class="button button-secondary">Download Export</button>
+			</form>
+
+			<hr />
+
+			<h2>Import</h2>
+			<p><strong>Warning:</strong> Importing will delete all existing Pusula data on this site and replace it with the file contents.</p>
+			<form method="post" enctype="multipart/form-data" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<?php wp_nonce_field( 'pusula_import', 'pusula_import_nonce' ); ?>
+				<input type="hidden" name="action" value="pusula_import">
+				<input type="file" name="pusula_import_file" accept=".json,application/json" required>
+				<p style="margin-top:12px;">
+					<button type="submit" class="button button-primary" onclick="return confirm('This will erase all existing Pusula data and replace it. Continue?');">Import and Replace Data</button>
+				</p>
+			</form>
+		</div>
+		<?php
+	}
+
+	public function handle_export() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Insufficient permissions.' );
+		}
+
+		check_admin_referer( 'pusula_export', 'pusula_export_nonce' );
+
+		$payload = $this->build_export_payload();
+		$json = wp_json_encode( $payload );
+		if ( false === $json ) {
+			wp_die( 'Export failed. Please try again.' );
+		}
+
+		nocache_headers();
+		$filename = 'pusula-backup-' . current_time( 'Ymd-His' ) . '.json';
+		header( 'Content-Type: application/json; charset=' . get_option( 'blog_charset' ) );
+		header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+		echo $json;
+		exit;
+	}
+
+	public function handle_import() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Insufficient permissions.' );
+		}
+
+		check_admin_referer( 'pusula_import', 'pusula_import_nonce' );
+
+		if ( empty( $_FILES['pusula_import_file'] ) ) {
+			$this->redirect_with_import_notice( 'error', 'No file was uploaded.' );
+		}
+
+		$file = $_FILES['pusula_import_file'];
+		if ( ! empty( $file['error'] ) ) {
+			$message = UPLOAD_ERR_NO_FILE === (int) $file['error'] ? 'No file was uploaded.' : 'Upload failed. Please try again.';
+			$this->redirect_with_import_notice( 'error', $message );
+		}
+
+		if ( empty( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
+			$this->redirect_with_import_notice( 'error', 'Upload failed. Please try again.' );
+		}
+
+		$json = file_get_contents( $file['tmp_name'] );
+		if ( false === $json ) {
+			$this->redirect_with_import_notice( 'error', 'Could not read the uploaded file.' );
+		}
+
+		$payload = $this->parse_import_payload( $json );
+		if ( is_wp_error( $payload ) ) {
+			$this->redirect_with_import_notice( 'error', $payload->get_error_message() );
+		}
+
+		$result = $this->import_payload( $payload );
+		if ( is_wp_error( $result ) ) {
+			$this->redirect_with_import_notice( 'error', $result->get_error_message() );
+		}
+
+		$this->redirect_with_import_notice( 'success', 'Import completed. Existing data was replaced.' );
+	}
+
+	private function redirect_with_import_notice( $status, $message ) {
+		$url = add_query_arg(
+			array(
+				'pusula_import'  => $status,
+				'pusula_message' => $message,
+			),
+			$this->get_backup_page_url()
+		);
+		wp_safe_redirect( $url );
+		exit;
+	}
+
+	private function build_export_payload() {
+		global $wpdb;
+
+		$this->purge_expired_locks();
+		$tables = $this->get_export_tables();
+		$data = array();
+
+		foreach ( $tables as $key => $table ) {
+			$data[ $key ] = $wpdb->get_results( "SELECT * FROM {$table}", ARRAY_A );
+		}
+
+		return array(
+			'version'     => self::VERSION,
+			'exported_at' => current_time( 'mysql' ),
+			'meta'        => array(
+				'installments_has_paid_date' => $this->installments_has_paid_date(),
+			),
+			'tables'      => $data,
+		);
+	}
+
+	private function parse_import_payload( $json ) {
+		$data = json_decode( $json, true );
+		if ( ! is_array( $data ) ) {
+			return new WP_Error( 'invalid_json', 'Invalid JSON file.' );
+		}
+
+		$tables = isset( $data['tables'] ) && is_array( $data['tables'] ) ? $data['tables'] : $data;
+		$allowed = array( 'customers', 'sales', 'installments', 'contacts', 'locks' );
+		$normalized = array();
+
+		foreach ( $allowed as $key ) {
+			$normalized[ $key ] = isset( $tables[ $key ] ) && is_array( $tables[ $key ] ) ? $tables[ $key ] : array();
+		}
+
+		$meta = isset( $data['meta'] ) && is_array( $data['meta'] ) ? $data['meta'] : array();
+
+		return array(
+			'tables' => $normalized,
+			'meta'   => $meta,
+		);
+	}
+
+	private function import_payload( array $payload ) {
+		global $wpdb;
+		$tables = $payload['tables'];
+		$meta = $payload['meta'];
+		$table_map = $this->get_export_tables();
+
+		$needs_paid_date = ! empty( $meta['installments_has_paid_date'] );
+		if ( ! $needs_paid_date && ! empty( $tables['installments'] ) ) {
+			foreach ( $tables['installments'] as $row ) {
+				if ( is_array( $row ) && array_key_exists( 'paid_date', $row ) ) {
+					$needs_paid_date = true;
+					break;
+				}
+			}
+		}
+		if ( $needs_paid_date ) {
+			$this->ensure_installments_paid_date_column();
+		}
+
+		$use_transaction = false;
+		if ( false !== $wpdb->query( 'START TRANSACTION' ) ) {
+			$use_transaction = true;
+		}
+
+		$wipe_order = array( 'installments', 'sales', 'contacts', 'customers', 'locks' );
+		foreach ( $wipe_order as $key ) {
+			$result = $this->clear_table( $table_map[ $key ] );
+			if ( is_wp_error( $result ) ) {
+				if ( $use_transaction ) {
+					$wpdb->query( 'ROLLBACK' );
+				}
+				return $result;
+			}
+		}
+
+		$insert_order = array( 'customers', 'sales', 'installments', 'contacts', 'locks' );
+		foreach ( $insert_order as $key ) {
+			$result = $this->insert_table_rows( $table_map[ $key ], $tables[ $key ] );
+			if ( is_wp_error( $result ) ) {
+				if ( $use_transaction ) {
+					$wpdb->query( 'ROLLBACK' );
+				}
+				return $result;
+			}
+		}
+
+		if ( $use_transaction ) {
+			$wpdb->query( 'COMMIT' );
+		}
+
+		return true;
+	}
+
+	private function clear_table( $table ) {
+		global $wpdb;
+		$result = $wpdb->query( "DELETE FROM {$table}" );
+		if ( false === $result ) {
+			return new WP_Error( 'delete_failed', 'Failed to clear table ' . $table . '.' );
+		}
+		return true;
+	}
+
+	private function insert_table_rows( $table, array $rows ) {
+		global $wpdb;
+		if ( empty( $rows ) ) {
+			return true;
+		}
+
+		$columns = $this->get_table_columns( $table );
+		if ( empty( $columns ) ) {
+			return new WP_Error( 'missing_table', 'Table not found: ' . $table . '.' );
+		}
+
+		$column_lookup = array_flip( $columns );
+		foreach ( $rows as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			$data = array();
+			foreach ( $row as $column => $value ) {
+				if ( isset( $column_lookup[ $column ] ) ) {
+					$data[ $column ] = $value;
+				}
+			}
+
+			if ( empty( $data ) ) {
+				continue;
+			}
+
+			$inserted = $wpdb->insert( $table, $data );
+			if ( false === $inserted ) {
+				return new WP_Error( 'insert_failed', 'Import failed while inserting data into ' . $table . '.' );
+			}
+		}
+
+		return true;
+	}
+
+	private function get_table_columns( $table ) {
+		global $wpdb;
+		$columns = $wpdb->get_col( "SHOW COLUMNS FROM {$table}", 0 );
+		return $columns ? $columns : array();
+	}
+
+	private function get_export_tables() {
+		return array(
+			'customers'    => $this->get_table( 'customers' ),
+			'sales'        => $this->get_table( 'sales' ),
+			'installments' => $this->get_table( 'installments' ),
+			'contacts'     => $this->get_table( 'contacts' ),
+			'locks'        => $this->get_table( 'locks' ),
+		);
 	}
 
 	// ---------------------------------------------------------------------
