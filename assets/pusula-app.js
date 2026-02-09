@@ -20,6 +20,27 @@
   const apiBase = (window.PusulaApp && PusulaApp.apiBase) || '';
   const wpNonce = (window.PusulaApp && PusulaApp.nonce) || '';
 
+  function getBusinessProfile() {
+    const raw = (window.PusulaApp && PusulaApp.business && typeof PusulaApp.business === 'object')
+      ? PusulaApp.business
+      : {};
+
+    return {
+      name: String(raw.name || '').trim(),
+      address: String(raw.address || '').trim(),
+      phone: String(raw.phone || '').trim(),
+      website: String(raw.website || '').trim(),
+      footerSub: String(raw.footerSub || '').trim(),
+    };
+  }
+
+  function buildBusinessContactLine(company) {
+    const parts = [];
+    if (company.phone) parts.push(`Telefon: ${company.phone}`);
+    if (company.website) parts.push(`Web: ${company.website}`);
+    return parts.join(' | ');
+  }
+
   const todayStr = () => {
     const d = new Date();
     const pad = (n) => (n < 10 ? `0${n}` : n);
@@ -1614,13 +1635,8 @@
 
   function printPaymentReceiptForMonth(customer, year, month1to12, salesList = null, fallbackInst = null) {
     if (!customer) return;
-    const company = {
-      name: 'ENES BEKO',
-      address: 'KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA',
-      phone: 'Telefon: (0322) 329 92 32',
-      web: 'Web: https://enesbeko.com',
-      footerSub: 'ENES EFY KARDEŞLER',
-    };
+    const company = getBusinessProfile();
+    const businessContactLine = buildBusinessContactLine(company);
 
     const items = collectPaidInstallmentsForMonth(year, month1to12, salesList);
     if (!items.length && fallbackInst && isPaid(fallbackInst.paid)) {
@@ -1691,9 +1707,9 @@
       <div class="receipt">
         <div class="no-print">Not: Yazdırma ekranında “Üstbilgi ve altbilgiler” seçeneğini kapatın.</div>
         <div class="brand">
-          <p class="name">${company.name}</p>
-          <p class="line">${company.address}</p>
-          <p class="line">${company.phone} | ${company.web}</p>
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.address ? `<p class="line">${company.address}</p>` : ''}
+          ${businessContactLine ? `<p class="line">${businessContactLine}</p>` : ''}
         </div>
         <div class="rule"></div>
         <p class="title">${monthName} ${year} Taksit Ödemesi</p>
@@ -1739,8 +1755,8 @@
         <div class="footer-rule"></div>
         <div class="footer">
           <p class="thanks">Mağazamızdan yapmış olduğunuz ödeme için teşekkür ederiz</p>
-          <p class="name">${company.name}</p>
-          <p class="sub">${company.footerSub}</p>
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.footerSub ? `<p class="sub">${company.footerSub}</p>` : ''}
         </div>
       </div>
       </body></html>`;
@@ -1795,13 +1811,8 @@
 
   function printReceiptDetailed(sale, cust) {
     if (!sale || !cust) return;
-    const company = {
-      name: 'ENES BEKO',
-      address: 'KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA',
-      phone: 'Telefon: (0322) 329 92 32',
-      web: 'Web: https://enesbeko.com',
-      footerSub: 'ENES EFY KARDEŞLER',
-    };
+    const company = getBusinessProfile();
+    const businessContactLine = buildBusinessContactLine(company);
 
     const normalizeDueDate = (value) => {
       const raw = String(value || '').trim();
@@ -1898,9 +1909,9 @@
       <div class="receipt">
         <div class="no-print">Not: Yazdırma ekranında “Üstbilgi ve altbilgiler” seçeneğini kapatın.</div>
         <div class="brand">
-          <p class="name">${company.name}</p>
-          <p class="line">${company.address}</p>
-          <p class="line">${company.phone} | ${company.web}</p>
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.address ? `<p class="line">${company.address}</p>` : ''}
+          ${businessContactLine ? `<p class="line">${businessContactLine}</p>` : ''}
         </div>
         <div class="rule"></div>
         <p class="title">${receiptTitle}</p>
@@ -1958,8 +1969,8 @@
         <div class="footer-rule"></div>
         <div class="footer">
           <p class="thanks">Mağazamızdan yapmış olduğunuz alış verişten dolayı teşekkür ederiz</p>
-          <p class="name">${company.name}</p>
-          <p class="sub">${company.footerSub}</p>
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.footerSub ? `<p class="sub">${company.footerSub}</p>` : ''}
         </div>
       </div>
       </body></html>`;

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.0.1
+ * Version: 1.1.0
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,10 +58,14 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION      = '1.0.0';
-	const OPTION_KEY   = 'pusula_lite_api_key';
-	const LOCK_TTL_SEC = 120; // seconds
-	const ROLE         = 'pusula_user';
+	const VERSION                      = '1.1.0';
+	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
+	const OPTION_KEY                   = 'pusula_lite_api_key';
+	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';
+	const OPTION_PLUGIN_VERSION        = 'pusula_lite_api_version';
+	const OPTION_LEGACY_PROFILE_DONE   = 'pusula_lite_legacy_profile_migrated';
+	const LOCK_TTL_SEC                 = 120; // seconds
+	const ROLE                         = 'pusula_user';
 
 	/** @var Pusula_Lite_API|null */
 	private static $instance = null;
@@ -75,6 +79,7 @@ class Pusula_Lite_API {
 	}
 
 	private function __construct() {
+		add_action( 'init', array( $this, 'maybe_run_upgrade_tasks' ), 1 );
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 		add_action( 'admin_menu', array( $this, 'register_admin_page' ) );
 		add_shortcode( 'pusula_lite_app', array( $this, 'render_shortcode' ) );
@@ -85,9 +90,18 @@ class Pusula_Lite_API {
 	// Activation
 	// ---------------------------------------------------------------------
 	public static function activate() {
+		$stored_version   = (string) get_option( self::OPTION_PLUGIN_VERSION, '' );
+		$has_existing_key = ! empty( get_option( self::OPTION_KEY ) );
+
 		self::create_tables();
 		self::maybe_generate_key();
 		self::register_role();
+
+		if ( ( '' === $stored_version && $has_existing_key ) || ( '' !== $stored_version && version_compare( $stored_version, self::LEGACY_PROFILE_MIGRATION_VER, '<' ) ) ) {
+			self::migrate_legacy_business_profile_once();
+		}
+
+		update_option( self::OPTION_PLUGIN_VERSION, self::VERSION );
 	}
 
 	private static function create_tables() {
@@ -192,6 +206,92 @@ class Pusula_Lite_API {
 		}
 	}
 
+	public function maybe_run_upgrade_tasks() {
+		$stored_version = (string) get_option( self::OPTION_PLUGIN_VERSION, '' );
+
+		if ( '' === $stored_version ) {
+			if ( self::is_existing_install() ) {
+				self::migrate_legacy_business_profile_once();
+			}
+			update_option( self::OPTION_PLUGIN_VERSION, self::VERSION );
+			return;
+		}
+
+		if ( version_compare( $stored_version, self::LEGACY_PROFILE_MIGRATION_VER, '<' ) ) {
+			self::migrate_legacy_business_profile_once();
+		}
+
+		if ( version_compare( $stored_version, self::VERSION, '<' ) ) {
+			update_option( self::OPTION_PLUGIN_VERSION, self::VERSION );
+		}
+	}
+
+	private static function is_existing_install() {
+		return ! empty( get_option( self::OPTION_KEY ) );
+	}
+
+	private static function get_default_business_profile() {
+		return array(
+			'name'       => '',
+			'address'    => '',
+			'phone'      => '',
+			'website'    => '',
+			'footer_sub' => '',
+		);
+	}
+
+	private static function get_legacy_business_profile() {
+		return array(
+			'name'       => 'ENES BEKO',
+			'address'    => 'KOZAN CD. PTT EVLERİ KAVŞAĞI NO: 689, ADANA',
+			'phone'      => '(0322) 329 92 32',
+			'website'    => 'https://enesbeko.com',
+			'footer_sub' => 'ENES EFY KARDEŞLER',
+		);
+	}
+
+	private static function sanitize_business_profile( $raw_profile ) {
+		$profile = is_array( $raw_profile ) ? $raw_profile : array();
+
+		return array(
+			'name'       => sanitize_text_field( isset( $profile['name'] ) ? $profile['name'] : '' ),
+			'address'    => sanitize_textarea_field( isset( $profile['address'] ) ? $profile['address'] : '' ),
+			'phone'      => sanitize_text_field( isset( $profile['phone'] ) ? $profile['phone'] : '' ),
+			'website'    => esc_url_raw( trim( (string) ( isset( $profile['website'] ) ? $profile['website'] : '' ) ) ),
+			'footer_sub' => sanitize_text_field( isset( $profile['footer_sub'] ) ? $profile['footer_sub'] : '' ),
+		);
+	}
+
+	private static function get_business_profile() {
+		$defaults = self::get_default_business_profile();
+		$stored   = get_option( self::OPTION_BUSINESS_PROFILE, array() );
+		$stored   = is_array( $stored ) ? $stored : array();
+		$merged   = wp_parse_args( $stored, $defaults );
+		return self::sanitize_business_profile( $merged );
+	}
+
+	private static function has_business_profile_values( $profile ) {
+		foreach ( self::get_default_business_profile() as $key => $default ) {
+			if ( '' !== trim( (string) ( isset( $profile[ $key ] ) ? $profile[ $key ] : $default ) ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static function migrate_legacy_business_profile_once() {
+		if ( get_option( self::OPTION_LEGACY_PROFILE_DONE ) ) {
+			return;
+		}
+
+		$current_profile = self::get_business_profile();
+		if ( ! self::has_business_profile_values( $current_profile ) ) {
+			update_option( self::OPTION_BUSINESS_PROFILE, self::get_legacy_business_profile() );
+		}
+
+		update_option( self::OPTION_LEGACY_PROFILE_DONE, 1 );
+	}
+
 	// ---------------------------------------------------------------------
 	// Admin UI
 	// ---------------------------------------------------------------------
@@ -215,16 +315,72 @@ class Pusula_Lite_API {
 			echo '<div class="notice notice-success is-dismissible"><p>API key regenerated.</p></div>';
 		}
 
-		$key = get_option( self::OPTION_KEY );
+		if ( isset( $_POST['pusula_business_nonce'] ) ) {
+			$nonce_ok = wp_verify_nonce(
+				sanitize_text_field( wp_unslash( $_POST['pusula_business_nonce'] ) ),
+				'pusula_save_business'
+			);
+
+			if ( $nonce_ok ) {
+				$business_profile = self::sanitize_business_profile(
+					array(
+						'name'       => isset( $_POST['pusula_business_name'] ) ? wp_unslash( $_POST['pusula_business_name'] ) : '',
+						'address'    => isset( $_POST['pusula_business_address'] ) ? wp_unslash( $_POST['pusula_business_address'] ) : '',
+						'phone'      => isset( $_POST['pusula_business_phone'] ) ? wp_unslash( $_POST['pusula_business_phone'] ) : '',
+						'website'    => isset( $_POST['pusula_business_website'] ) ? wp_unslash( $_POST['pusula_business_website'] ) : '',
+						'footer_sub' => isset( $_POST['pusula_business_footer_sub'] ) ? wp_unslash( $_POST['pusula_business_footer_sub'] ) : '',
+					)
+				);
+				update_option( self::OPTION_BUSINESS_PROFILE, $business_profile );
+				echo '<div class="notice notice-success is-dismissible"><p>Business information saved.</p></div>';
+			} else {
+				echo '<div class="notice notice-error is-dismissible"><p>Business information could not be saved due to a security check failure.</p></div>';
+			}
+		}
+
+		$key             = get_option( self::OPTION_KEY );
+		$business_profile = self::get_business_profile();
 		?>
 		<div class="wrap">
 			<h1>Pusula Lite API</h1>
+			<h2>API Key</h2>
 			<p>Provide the API key below to the desktop client. Keep it secret.</p>
 			<p><strong>API Key:</strong></p>
 			<code style="font-size:14px;"><?php echo esc_html( $key ); ?></code>
 			<form method="post" style="margin-top:16px;">
 				<?php wp_nonce_field( 'pusula_regen_key', 'pusula_regen_nonce' ); ?>
 				<button type="submit" class="button button-secondary">Regenerate Key</button>
+			</form>
+
+			<hr style="margin:24px 0;">
+
+			<h2>Business Information</h2>
+			<p>This information is used on printed receipts (makbuz).</p>
+			<form method="post">
+				<?php wp_nonce_field( 'pusula_save_business', 'pusula_business_nonce' ); ?>
+				<table class="form-table" role="presentation">
+					<tr>
+						<th scope="row"><label for="pusula-business-name">Business Name</label></th>
+						<td><input type="text" class="regular-text" id="pusula-business-name" name="pusula_business_name" value="<?php echo esc_attr( $business_profile['name'] ); ?>"></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="pusula-business-address">Address</label></th>
+						<td><textarea class="large-text" rows="3" id="pusula-business-address" name="pusula_business_address"><?php echo esc_textarea( $business_profile['address'] ); ?></textarea></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="pusula-business-phone">Phone</label></th>
+						<td><input type="text" class="regular-text" id="pusula-business-phone" name="pusula_business_phone" value="<?php echo esc_attr( $business_profile['phone'] ); ?>"></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="pusula-business-website">Website</label></th>
+						<td><input type="url" class="regular-text" id="pusula-business-website" name="pusula_business_website" value="<?php echo esc_attr( $business_profile['website'] ); ?>"></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="pusula-business-footer-sub">Footer Line</label></th>
+						<td><input type="text" class="regular-text" id="pusula-business-footer-sub" name="pusula_business_footer_sub" value="<?php echo esc_attr( $business_profile['footer_sub'] ); ?>"></td>
+					</tr>
+				</table>
+				<?php submit_button( 'Save Business Information' ); ?>
 			</form>
 		</div>
 		<?php
@@ -351,12 +507,20 @@ class Pusula_Lite_API {
 		wp_enqueue_style( 'pusula-lite-app' );
 		wp_enqueue_script( 'pusula-lite-app' );
 
+		$business_profile = self::get_business_profile();
 		wp_localize_script(
 			'pusula-lite-app',
 			'PusulaApp',
 			array(
-				'apiBase' => esc_url_raw( rest_url( 'pusula/v1' ) ),
-				'nonce'   => wp_create_nonce( 'wp_rest' ),
+				'apiBase'  => esc_url_raw( rest_url( 'pusula/v1' ) ),
+				'nonce'    => wp_create_nonce( 'wp_rest' ),
+				'business' => array(
+					'name'      => $business_profile['name'],
+					'address'   => $business_profile['address'],
+					'phone'     => $business_profile['phone'],
+					'website'   => $business_profile['website'],
+					'footerSub' => $business_profile['footer_sub'],
+				),
 			)
 		);
 
