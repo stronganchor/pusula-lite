@@ -18,10 +18,12 @@ html, body {
   padding: 16px;
   font-family: "Segoe UI", sans-serif;
   min-height: 100vh;
+  min-height: 100dvh;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 .pusula-app.allow-scroll {
   overflow: auto;
@@ -101,6 +103,7 @@ html, body {
   align-items: center;
   margin-bottom: 8px;
   gap: 12px;
+  min-width: 0;
 }
 .pusula-header h1 {
   font-size: 16px;
@@ -113,18 +116,29 @@ html, body {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .pusula-tabs {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  min-width: 0;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 .pusula-tabs button {
   background: #181f2c;
   color: #e6ecf3;
   border: 1px solid #2f3a4f;
-  padding: 6px 10px;
+  padding: 5px 9px;
   cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  font-size: 12px;
 }
 .pusula-tabs button.active {
   background: #88b7c9;
@@ -136,6 +150,7 @@ html, body {
   padding: 12px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -403,6 +418,21 @@ html, body {
   overflow: auto;
   border: 1px solid #2f3a4f;
 }
+#pusula-search-table {
+  min-width: 760px;
+}
+#pusula-sales-table {
+  min-width: 640px;
+}
+#pusula-inst-table {
+  min-width: 420px;
+}
+#rep-table {
+  min-width: 760px;
+}
+#exp-table {
+  min-width: 1320px;
+}
 .pusula-table tr.selected {
   background: #283345;
 }
@@ -661,6 +691,38 @@ html, body {
 }
 .pusula-modal-main.two-col .pusula-modal-textarea {
   resize: vertical;
+}
+@media (max-width: 1400px) {
+  .add-columns,
+  .sale-container {
+    flex-direction: column;
+  }
+  .add-right,
+  .sale-left,
+  .sale-right {
+    min-width: 0;
+    max-width: none;
+  }
+  .sale-right textarea {
+    min-height: 160px;
+  }
+}
+@media (max-width: 1200px) {
+  .form-row {
+    grid-template-columns: 108px 1fr;
+  }
+  .add-top-bar .form-row {
+    grid-template-columns: 108px max-content;
+  }
+}
+@media (max-width: 1024px) {
+  .form-row,
+  .add-top-bar .form-row {
+    grid-template-columns: 1fr;
+  }
+  .form-row label {
+    white-space: normal;
+  }
 }
 @media (max-width: 720px) {
   .pusula-modal-main {
