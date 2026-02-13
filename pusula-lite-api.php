@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,7 +58,7 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION                      = '1.1.0';
+	const VERSION                      = '1.2.0';
 	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
 	const OPTION_KEY                   = 'pusula_lite_api_key';
 	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';
@@ -94,6 +94,7 @@ class Pusula_Lite_API {
 		$has_existing_key = ! empty( get_option( self::OPTION_KEY ) );
 
 		self::create_tables();
+		self::migrate_legacy_paid_installments_to_payments();
 		self::maybe_generate_key();
 		self::register_role();
 
@@ -144,6 +145,17 @@ class Pusula_Lite_API {
 			KEY sale_idx (sale_id)
 		) {$charset_collate};";
 
+		$installment_payments = "CREATE TABLE {$prefix}installment_payments (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			installment_id BIGINT UNSIGNED NOT NULL,
+			amount DECIMAL(10,2) NOT NULL,
+			payment_date DATE NOT NULL,
+			created_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			KEY installment_idx (installment_id),
+			KEY payment_date_idx (payment_date)
+		) {$charset_collate};";
+
 		$contacts = "CREATE TABLE {$prefix}contacts (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			customer_id BIGINT UNSIGNED NOT NULL,
@@ -172,8 +184,53 @@ class Pusula_Lite_API {
 		dbDelta( $customers );
 		dbDelta( $sales );
 		dbDelta( $installments );
+		dbDelta( $installment_payments );
 		dbDelta( $contacts );
 		dbDelta( $locks );
+	}
+
+	private static function migrate_legacy_paid_installments_to_payments() {
+		global $wpdb;
+		$prefix        = $wpdb->prefix . 'pusula_';
+		$inst_table    = $prefix . 'installments';
+		$payment_table = $prefix . 'installment_payments';
+
+		$rows = $wpdb->get_results(
+			"SELECT i.id, i.amount, i.paid_date, i.due_date
+			 FROM {$inst_table} i
+			 LEFT JOIN {$payment_table} p ON p.installment_id = i.id
+			 WHERE COALESCE(i.paid, 0) = 1
+			 GROUP BY i.id, i.amount, i.paid_date, i.due_date
+			 HAVING COUNT(p.id) = 0",
+			ARRAY_A
+		);
+
+		if ( empty( $rows ) ) {
+			return;
+		}
+
+		foreach ( $rows as $row ) {
+			$amount = round( (float) $row['amount'], 2 );
+			if ( $amount <= 0 ) {
+				continue;
+			}
+			$paid_date = ! empty( $row['paid_date'] ) ? (string) $row['paid_date'] : '';
+			if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $paid_date ) ) {
+				$due_date  = ! empty( $row['due_date'] ) ? (string) $row['due_date'] : '';
+				$paid_date = preg_match( '/^\d{4}-\d{2}-\d{2}$/', $due_date ) ? $due_date : current_time( 'Y-m-d' );
+			}
+
+			$wpdb->insert(
+				$payment_table,
+				array(
+					'installment_id' => (int) $row['id'],
+					'amount'         => $amount,
+					'payment_date'   => $paid_date,
+					'created_at'     => current_time( 'mysql' ),
+				),
+				array( '%d', '%f', '%s', '%s' )
+			);
+		}
 	}
 
 	private static function maybe_generate_key() {
@@ -211,6 +268,8 @@ class Pusula_Lite_API {
 
 		if ( '' === $stored_version ) {
 			if ( self::is_existing_install() ) {
+				self::create_tables();
+				self::migrate_legacy_paid_installments_to_payments();
 				self::migrate_legacy_business_profile_once();
 			}
 			update_option( self::OPTION_PLUGIN_VERSION, self::VERSION );
@@ -222,6 +281,8 @@ class Pusula_Lite_API {
 		}
 
 		if ( version_compare( $stored_version, self::VERSION, '<' ) ) {
+			self::create_tables();
+			self::migrate_legacy_paid_installments_to_payments();
 			update_option( self::OPTION_PLUGIN_VERSION, self::VERSION );
 		}
 	}
@@ -764,6 +825,36 @@ class Pusula_Lite_API {
 			)
 		);
 
+		register_rest_route(
+			$namespace,
+			'/installments/(?P<id>\d+)/payments',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_installment_payments' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+			)
+		);
+
+		register_rest_route(
+			$namespace,
+			'/installments/(?P<id>\d+)/payments',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'create_installment_payment' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+			)
+		);
+
+		register_rest_route(
+			$namespace,
+			'/installments/(?P<id>\d+)/payments/(?P<payment_id>\d+)',
+			array(
+				'methods'             => WP_REST_Server::DELETABLE,
+				'callback'            => array( $this, 'delete_installment_payment' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+			)
+		);
+
 		// Locks
 		register_rest_route(
 			$namespace,
@@ -832,6 +923,329 @@ class Pusula_Lite_API {
 		}
 		$this->installments_has_paid_date = true;
 		return true;
+	}
+
+	private function to_money_float( $value ) {
+		return round( (float) $value, 2 );
+	}
+
+	private function to_money_cents( $value ) {
+		return (int) round( $this->to_money_float( $value ) * 100 );
+	}
+
+	private function is_valid_iso_date( $value ) {
+		return is_string( $value ) && (bool) preg_match( '/^\d{4}-\d{2}-\d{2}$/', $value );
+	}
+
+	private function get_installment_payment_summary( array $installment_ids, $include_payments = false ) {
+		global $wpdb;
+		$payment_table = $this->get_table( 'installment_payments' );
+		$ids           = array_values( array_filter( array_map( 'intval', $installment_ids ) ) );
+
+		if ( empty( $ids ) ) {
+			return array();
+		}
+
+		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		$rows         = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, installment_id, amount, payment_date, created_at
+				 FROM {$payment_table}
+				 WHERE installment_id IN ({$placeholders})
+				 ORDER BY payment_date ASC, id ASC",
+				$ids
+			),
+			ARRAY_A
+		);
+
+		$summary = array();
+		foreach ( $ids as $id ) {
+			$summary[ $id ] = array(
+				'paid_amount'         => 0.0,
+				'payment_count'       => 0,
+				'last_payment_id'     => null,
+				'last_payment_amount' => 0.0,
+				'last_payment_date'   => null,
+				'payments'            => array(),
+			);
+		}
+
+		foreach ( $rows as $row ) {
+			$installment_id = (int) $row['installment_id'];
+			if ( ! isset( $summary[ $installment_id ] ) ) {
+				$summary[ $installment_id ] = array(
+					'paid_amount'         => 0.0,
+					'payment_count'       => 0,
+					'last_payment_id'     => null,
+					'last_payment_amount' => 0.0,
+					'last_payment_date'   => null,
+					'payments'            => array(),
+				);
+			}
+			$amount = $this->to_money_float( $row['amount'] );
+			$summary[ $installment_id ]['paid_amount']   = $this->to_money_float( $summary[ $installment_id ]['paid_amount'] + $amount );
+			$summary[ $installment_id ]['payment_count'] = (int) $summary[ $installment_id ]['payment_count'] + 1;
+			$summary[ $installment_id ]['last_payment_id']     = (int) $row['id'];
+			$summary[ $installment_id ]['last_payment_amount'] = $amount;
+			$summary[ $installment_id ]['last_payment_date']   = $row['payment_date'];
+
+			if ( $include_payments ) {
+				$summary[ $installment_id ]['payments'][] = array(
+					'id'           => (int) $row['id'],
+					'installment_id'=> $installment_id,
+					'amount'       => $amount,
+					'payment_date' => $row['payment_date'],
+					'created_at'   => $row['created_at'],
+				);
+			}
+		}
+
+		return $summary;
+	}
+
+	private function enrich_installments_with_payment_data( array $rows, $id_key = 'id', $include_payments = false ) {
+		$ids = array();
+		foreach ( $rows as $row ) {
+			$rid = isset( $row[ $id_key ] ) ? (int) $row[ $id_key ] : 0;
+			if ( $rid > 0 ) {
+				$ids[] = $rid;
+			}
+		}
+		$summary = $this->get_installment_payment_summary( $ids, $include_payments );
+
+		foreach ( $rows as &$row ) {
+			$rid    = isset( $row[ $id_key ] ) ? (int) $row[ $id_key ] : 0;
+			$amount = $this->to_money_float( isset( $row['amount'] ) ? $row['amount'] : 0 );
+			$info   = isset( $summary[ $rid ] ) ? $summary[ $rid ] : array(
+				'paid_amount'         => 0.0,
+				'payment_count'       => 0,
+				'last_payment_id'     => null,
+				'last_payment_amount' => 0.0,
+				'last_payment_date'   => null,
+				'payments'            => array(),
+			);
+
+			$paid_amount = $this->to_money_float( $info['paid_amount'] );
+			$remaining   = $this->to_money_float( max( 0, $amount - $paid_amount ) );
+			$is_paid     = $remaining <= 0.00001 ? 1 : 0;
+
+			// Backward compatibility: legacy rows may have paid=1 without payment records.
+			if ( (int) $info['payment_count'] === 0 && isset( $row['paid'] ) && (int) $row['paid'] === 1 ) {
+				$paid_amount = $amount;
+				$remaining   = 0.0;
+				$is_paid     = 1;
+			}
+
+			$row['amount']             = $amount;
+			$row['paid_amount']        = $paid_amount;
+			$row['remaining_amount']   = $remaining;
+			$row['payment_count']      = (int) $info['payment_count'];
+			$row['last_payment_id']    = $info['last_payment_id'] ? (int) $info['last_payment_id'] : null;
+			$row['last_payment_amount']= $this->to_money_float( $info['last_payment_amount'] );
+			$row['last_payment_date']  = $info['last_payment_date'];
+			$row['paid']               = $is_paid;
+
+			if ( $is_paid && empty( $row['paid_date'] ) && ! empty( $info['last_payment_date'] ) ) {
+				$row['paid_date'] = $info['last_payment_date'];
+			}
+
+			if ( $include_payments ) {
+				$running = 0.0;
+				$payments = array();
+				foreach ( $info['payments'] as $payment ) {
+					$running = $this->to_money_float( $running + $this->to_money_float( $payment['amount'] ) );
+					$payment['running_paid_amount']      = $running;
+					$payment['remaining_after_payment']  = $this->to_money_float( max( 0, $amount - $running ) );
+					$payments[] = $payment;
+				}
+				$row['payments'] = $payments;
+			}
+		}
+		unset( $row );
+
+		return $rows;
+	}
+
+	private function recalculate_installment_payment_status( $installment_id ) {
+		global $wpdb;
+		$table         = $this->get_table( 'installments' );
+		$installment_id = absint( $installment_id );
+		if ( ! $installment_id ) {
+			return null;
+		}
+
+		$existing = $wpdb->get_row(
+			$wpdb->prepare( "SELECT id, amount FROM {$table} WHERE id = %d", $installment_id ),
+			ARRAY_A
+		);
+		if ( ! $existing ) {
+			return null;
+		}
+
+		$amount  = $this->to_money_float( $existing['amount'] );
+		$summary = $this->get_installment_payment_summary( array( $installment_id ), false );
+		$info    = isset( $summary[ $installment_id ] ) ? $summary[ $installment_id ] : array(
+			'paid_amount'       => 0.0,
+			'payment_count'     => 0,
+			'last_payment_date' => null,
+		);
+		$paid_amount = $this->to_money_float( $info['paid_amount'] );
+		$remaining   = $this->to_money_float( max( 0, $amount - $paid_amount ) );
+		$is_paid     = $remaining <= 0.00001 ? 1 : 0;
+
+		$has_paid_date = $this->ensure_installments_paid_date_column();
+		$data          = array( 'paid' => $is_paid );
+		$formats       = array( '%d' );
+		if ( $has_paid_date ) {
+			$data['paid_date'] = $is_paid ? $info['last_payment_date'] : null;
+			$formats[]         = '%s';
+		}
+
+		$wpdb->update(
+			$table,
+			$data,
+			array( 'id' => $installment_id ),
+			$formats,
+			array( '%d' )
+		);
+
+		return array(
+			'amount'           => $amount,
+			'paid_amount'      => $paid_amount,
+			'remaining_amount' => $remaining,
+			'paid'             => $is_paid,
+			'paid_date'        => $is_paid ? $info['last_payment_date'] : null,
+			'payment_count'    => (int) $info['payment_count'],
+		);
+	}
+
+	private function get_installment_row_with_payments( $installment_id, $include_payments = false ) {
+		global $wpdb;
+		$table = $this->get_table( 'installments' );
+		$row   = $wpdb->get_row(
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", absint( $installment_id ) ),
+			ARRAY_A
+		);
+		if ( ! $row ) {
+			return null;
+		}
+		$rows = $this->enrich_installments_with_payment_data( array( $row ), 'id', $include_payments );
+		return isset( $rows[0] ) ? $rows[0] : null;
+	}
+
+	private function create_installment_payment_internal( $installment_id, $amount, $payment_date = null ) {
+		global $wpdb;
+		$installment = $this->get_installment_row_with_payments( $installment_id, false );
+		if ( ! $installment ) {
+			return new WP_Error( 'not_found', 'Taksit bulunamadı.', array( 'status' => 404 ) );
+		}
+
+		$remaining_cents = $this->to_money_cents( $installment['remaining_amount'] );
+		if ( $remaining_cents <= 0 ) {
+			return new WP_Error( 'already_paid', 'Bu taksit tamamen ödenmiş.', array( 'status' => 400 ) );
+		}
+
+		$pay_cents = $this->to_money_cents( $amount );
+		if ( $pay_cents <= 0 ) {
+			return new WP_Error( 'invalid_amount', 'Ödeme tutarı 0 dan büyük olmalıdır.', array( 'status' => 400 ) );
+		}
+		if ( $pay_cents > $remaining_cents ) {
+			return new WP_Error( 'amount_exceeds_remaining', 'Ödeme tutarı kalan borçtan büyük olamaz.', array( 'status' => 400 ) );
+		}
+
+		$pay_date = $payment_date ? sanitize_text_field( $payment_date ) : current_time( 'Y-m-d' );
+		if ( ! $this->is_valid_iso_date( $pay_date ) ) {
+			return new WP_Error( 'invalid_date', 'Ödeme tarihi geçersiz.', array( 'status' => 400 ) );
+		}
+
+		$payment_table = $this->get_table( 'installment_payments' );
+		$pay_amount    = $this->to_money_float( $pay_cents / 100 );
+
+		$inserted = $wpdb->insert(
+			$payment_table,
+			array(
+				'installment_id' => (int) $installment_id,
+				'amount'         => $pay_amount,
+				'payment_date'   => $pay_date,
+				'created_at'     => current_time( 'mysql' ),
+			),
+			array( '%d', '%f', '%s', '%s' )
+		);
+
+		if ( false === $inserted ) {
+			return new WP_Error( 'payment_insert_failed', 'Ödeme kaydı oluşturulamadı.', array( 'status' => 500 ) );
+		}
+
+		$payment_id  = (int) $wpdb->insert_id;
+		$before_paid = $this->to_money_float( $installment['paid_amount'] );
+		$status      = $this->recalculate_installment_payment_status( $installment_id );
+		$updated     = $this->get_installment_row_with_payments( $installment_id, false );
+
+		return array(
+			'payment' => array(
+				'id'                       => $payment_id,
+				'installment_id'           => (int) $installment_id,
+				'amount'                   => $pay_amount,
+				'payment_date'             => $pay_date,
+				'paid_before'              => $before_paid,
+				'paid_after'               => $status ? $this->to_money_float( $status['paid_amount'] ) : $this->to_money_float( $before_paid + $pay_amount ),
+				'remaining_after_payment'  => $status ? $this->to_money_float( $status['remaining_amount'] ) : $this->to_money_float( max( 0, (float) $installment['remaining_amount'] - $pay_amount ) ),
+			),
+			'installment' => $updated ? $updated : $installment,
+		);
+	}
+
+	private function enrich_customers_with_debt_totals( array $rows ) {
+		global $wpdb;
+		$sales_table    = $this->get_table( 'sales' );
+		$inst_table     = $this->get_table( 'installments' );
+		$payments_table = $this->get_table( 'installment_payments' );
+		$customer_ids   = array_values( array_filter( array_map( 'intval', wp_list_pluck( $rows, 'id' ) ) ) );
+
+		if ( empty( $customer_ids ) ) {
+			return $rows;
+		}
+
+		$placeholders = implode( ',', array_fill( 0, count( $customer_ids ), '%d' ) );
+		$debt_rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT
+					s.customer_id,
+					COALESCE(
+						SUM(
+							CASE
+								WHEN COALESCE(i.amount, 0) - COALESCE(p.paid_total, 0) > 0
+									THEN COALESCE(i.amount, 0) - COALESCE(p.paid_total, 0)
+								ELSE 0
+							END
+						),
+						0
+					) AS debt_total
+				FROM {$sales_table} s
+				INNER JOIN {$inst_table} i ON i.sale_id = s.id
+				LEFT JOIN (
+					SELECT installment_id, SUM(amount) AS paid_total
+					FROM {$payments_table}
+					GROUP BY installment_id
+				) p ON p.installment_id = i.id
+				WHERE s.customer_id IN ({$placeholders})
+				GROUP BY s.customer_id",
+				$customer_ids
+			),
+			ARRAY_A
+		);
+
+		$lookup = array();
+		foreach ( $debt_rows as $debt_row ) {
+			$lookup[ (int) $debt_row['customer_id'] ] = $this->to_money_float( $debt_row['debt_total'] );
+		}
+
+		foreach ( $rows as &$row ) {
+			$row['debt_total'] = isset( $lookup[ (int) $row['id'] ] ) ? $lookup[ (int) $row['id'] ] : 0.0;
+		}
+		unset( $row );
+
+		return $rows;
 	}
 
 	// ---------------------------------------------------------------------
@@ -938,6 +1352,7 @@ class Pusula_Lite_API {
 			if ( $ids ) {
 				$sales_table = $this->get_table( 'sales' );
 				$inst_table  = $this->get_table( 'installments' );
+				$pay_table   = $this->get_table( 'installment_payments' );
 				$today       = current_time( 'Y-m-d' );
 				$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
 				$params = array_merge( $ids, array( $today ) );
@@ -946,8 +1361,13 @@ class Pusula_Lite_API {
 						"SELECT DISTINCT s.customer_id
 						 FROM {$sales_table} s
 						 INNER JOIN {$inst_table} i ON i.sale_id = s.id
+						 LEFT JOIN (
+						 	SELECT installment_id, SUM(amount) AS paid_total
+						 	FROM {$pay_table}
+						 	GROUP BY installment_id
+						 ) p ON p.installment_id = i.id
 						 WHERE s.customer_id IN ({$placeholders})
-						   AND i.paid = 0
+						   AND COALESCE(i.amount, 0) - COALESCE(p.paid_total, 0) > 0
 						   AND i.due_date IS NOT NULL
 						   AND i.due_date < %s",
 						$params
@@ -962,6 +1382,11 @@ class Pusula_Lite_API {
 			}
 			unset( $row );
 		}
+
+		if ( $rows ) {
+			$rows = $this->enrich_customers_with_debt_totals( $rows );
+		}
+
 		return rest_ensure_response( $rows );
 	}
 
@@ -976,6 +1401,8 @@ class Pusula_Lite_API {
 		}
 
 		$row['contacts'] = $this->get_contacts( $request )->get_data();
+		$with_debt       = $this->enrich_customers_with_debt_totals( array( $row ) );
+		$row['debt_total'] = isset( $with_debt[0]['debt_total'] ) ? $with_debt[0]['debt_total'] : 0.0;
 
 		return rest_ensure_response( $row );
 	}
@@ -1069,12 +1496,19 @@ class Pusula_Lite_API {
 		$cust_table  = $this->get_table( 'customers' );
 		$sales_table = $this->get_table( 'sales' );
 		$inst_table  = $this->get_table( 'installments' );
+		$pay_table   = $this->get_table( 'installment_payments' );
 		$contact_tbl = $this->get_table( 'contacts' );
 
 		// delete installments for this customer's sales
 		$sale_ids = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$sales_table} WHERE customer_id = %d", $id ) );
 		if ( $sale_ids ) {
 			foreach ( $sale_ids as $sid ) {
+				$installment_ids = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$inst_table} WHERE sale_id = %d", $sid ) );
+				if ( $installment_ids ) {
+					foreach ( $installment_ids as $installment_id ) {
+						$wpdb->delete( $pay_table, array( 'installment_id' => $installment_id ), array( '%d' ) );
+					}
+				}
 				$wpdb->delete( $inst_table, array( 'sale_id' => $sid ), array( '%d' ) );
 			}
 		}
@@ -1201,9 +1635,9 @@ class Pusula_Lite_API {
 			$placeholders = implode( ',', array_fill( 0, count( $sale_ids ), '%d' ) );
 			$inst_sql = $wpdb->prepare( "SELECT * FROM {$inst_table} WHERE sale_id IN ($placeholders) ORDER BY due_date ASC, id ASC", $sale_ids );
 			$inst_rows = $wpdb->get_results( $inst_sql, ARRAY_A );
+			$inst_rows = $this->enrich_installments_with_payment_data( $inst_rows, 'id', true );
 			$grouped = array();
 			foreach ( $inst_rows as $inst ) {
-				$inst['paid'] = (int) $inst['paid'];
 				$sid = (int) $inst['sale_id'];
 				if ( ! isset( $grouped[ $sid ] ) ) {
 					$grouped[ $sid ] = array();
@@ -1211,7 +1645,35 @@ class Pusula_Lite_API {
 				$grouped[ $sid ][] = $inst;
 			}
 			foreach ( $rows as &$row ) {
-				$row['installments'] = $grouped[ $row['id'] ] ?? array();
+				$installments = $grouped[ $row['id'] ] ?? array();
+				$row['installments'] = $installments;
+				$row['installments_total'] = $this->to_money_float(
+					array_reduce(
+						$installments,
+						function( $sum, $inst ) {
+							return $sum + (float) ( isset( $inst['amount'] ) ? $inst['amount'] : 0 );
+						},
+						0
+					)
+				);
+				$row['installments_paid_total'] = $this->to_money_float(
+					array_reduce(
+						$installments,
+						function( $sum, $inst ) {
+							return $sum + (float) ( isset( $inst['paid_amount'] ) ? $inst['paid_amount'] : 0 );
+						},
+						0
+					)
+				);
+				$row['installments_remaining_total'] = $this->to_money_float(
+					array_reduce(
+						$installments,
+						function( $sum, $inst ) {
+							return $sum + (float) ( isset( $inst['remaining_amount'] ) ? $inst['remaining_amount'] : 0 );
+						},
+						0
+					)
+				);
 			}
 			unset( $row );
 		}
@@ -1230,15 +1692,9 @@ class Pusula_Lite_API {
 
 		$today         = current_time( 'Y-m-d' );
 		$has_paid_date = $this->ensure_installments_paid_date_column();
-		if ( $has_paid_date ) {
-			$where            = array( 'i.due_date IS NOT NULL', '(COALESCE(i.paid, 0) = 0 OR (i.paid = 1 AND i.paid_date = %s))' );
-			$params           = array( $today );
-			$paid_date_select = 'i.paid_date';
-		} else {
-			$where            = array( 'i.due_date IS NOT NULL', 'COALESCE(i.paid, 0) = 0' );
-			$params           = array();
-			$paid_date_select = 'NULL AS paid_date';
-		}
+		$where         = array( 'i.due_date IS NOT NULL' );
+		$params        = array();
+		$paid_date_select = $has_paid_date ? 'i.paid_date' : 'NULL AS paid_date';
 
 		if ( $start ) {
 			$where[]  = 'i.due_date >= %s';
@@ -1275,14 +1731,20 @@ class Pusula_Lite_API {
 		}
 
 		$rows = $wpdb->get_results( $sql, ARRAY_A );
-		if ( $rows ) {
-			foreach ( $rows as &$row ) {
-				$row['paid'] = (int) $row['paid'];
+		$rows = $this->enrich_installments_with_payment_data( $rows, 'installment_id', false );
+
+		$filtered = array();
+		foreach ( $rows as $row ) {
+			$remaining    = $this->to_money_float( isset( $row['remaining_amount'] ) ? $row['remaining_amount'] : 0 );
+			$paid_date    = isset( $row['paid_date'] ) ? (string) $row['paid_date'] : '';
+			$is_paid_today = $remaining <= 0.00001 && $paid_date === $today;
+			if ( $remaining > 0.00001 || $is_paid_today ) {
+				$row['installment_amount'] = $this->to_money_float( isset( $row['amount'] ) ? $row['amount'] : 0 );
+				$filtered[] = $row;
 			}
-			unset( $row );
 		}
 
-		return rest_ensure_response( $rows );
+		return rest_ensure_response( $filtered );
 	}
 
 	public function get_sale( WP_REST_Request $request ) {
@@ -1309,12 +1771,34 @@ class Pusula_Lite_API {
 			$wpdb->prepare( "SELECT * FROM {$inst_table} WHERE sale_id = %d ORDER BY due_date ASC, id ASC", $id ),
 			ARRAY_A
 		);
-		if ( $row['installments'] ) {
-			foreach ( $row['installments'] as &$inst ) {
-				$inst['paid'] = (int) $inst['paid'];
-			}
-			unset( $inst );
-		}
+		$row['installments'] = $this->enrich_installments_with_payment_data( $row['installments'], 'id', true );
+		$row['installments_total'] = $this->to_money_float(
+			array_reduce(
+				$row['installments'],
+				function( $sum, $inst ) {
+					return $sum + (float) ( isset( $inst['amount'] ) ? $inst['amount'] : 0 );
+				},
+				0
+			)
+		);
+		$row['installments_paid_total'] = $this->to_money_float(
+			array_reduce(
+				$row['installments'],
+				function( $sum, $inst ) {
+					return $sum + (float) ( isset( $inst['paid_amount'] ) ? $inst['paid_amount'] : 0 );
+				},
+				0
+			)
+		);
+		$row['installments_remaining_total'] = $this->to_money_float(
+			array_reduce(
+				$row['installments'],
+				function( $sum, $inst ) {
+					return $sum + (float) ( isset( $inst['remaining_amount'] ) ? $inst['remaining_amount'] : 0 );
+				},
+				0
+			)
+		);
 
 		return rest_ensure_response( $row );
 	}
@@ -1375,8 +1859,15 @@ class Pusula_Lite_API {
 		global $wpdb;
 		$table   = $this->get_table( 'sales' );
 		$inst    = $this->get_table( 'installments' );
+		$pay     = $this->get_table( 'installment_payments' );
 		$id      = absint( $request['id'] );
 
+		$installment_ids = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$inst} WHERE sale_id = %d", $id ) );
+		if ( $installment_ids ) {
+			foreach ( $installment_ids as $installment_id ) {
+				$wpdb->delete( $pay, array( 'installment_id' => $installment_id ), array( '%d' ) );
+			}
+		}
 		$wpdb->delete( $inst, array( 'sale_id' => $id ), array( '%d' ) );
 		$wpdb->delete( $table, array( 'id' => $id ), array( '%d' ) );
 
@@ -1398,18 +1889,13 @@ class Pusula_Lite_API {
 		}
 
 		$rows = $wpdb->get_results( $sql, ARRAY_A );
-		if ( $rows ) {
-			foreach ( $rows as &$row ) {
-				$row['paid'] = (int) $row['paid'];
-			}
-			unset( $row );
-		}
+		$rows = $this->enrich_installments_with_payment_data( $rows, 'id', true );
 		return rest_ensure_response( $rows );
 	}
 
 	public function create_installment( WP_REST_Request $request ) {
 		global $wpdb;
-		$table = $this->get_table( 'installments' );
+		$table         = $this->get_table( 'installments' );
 		$has_paid_date = $this->ensure_installments_paid_date_column();
 
 		$sale_id = absint( $request->get_param( 'sale_id' ) );
@@ -1417,33 +1903,54 @@ class Pusula_Lite_API {
 			return new WP_Error( 'missing_sale', 'Satış numarası zorunludur.', array( 'status' => 400 ) );
 		}
 
-		$paid = (int) $request->get_param( 'paid' );
+		$due_date = $request->get_param( 'due_date' ) ? sanitize_text_field( $request->get_param( 'due_date' ) ) : null;
+		if ( $due_date && ! $this->is_valid_iso_date( $due_date ) ) {
+			return new WP_Error( 'invalid_due_date', 'Vade tarihi geçersiz.', array( 'status' => 400 ) );
+		}
+
+		$amount        = $this->to_money_float( $request->get_param( 'amount' ) );
+		$requested_paid = (int) $request->get_param( 'paid' ) === 1;
 		$data = array(
 			'sale_id'  => $sale_id,
-			'due_date' => $request->get_param( 'due_date' ) ? sanitize_text_field( $request->get_param( 'due_date' ) ) : null,
-			'amount'   => $request->get_param( 'amount' ),
-			'paid'     => $paid,
+			'due_date' => $due_date,
+			'amount'   => $amount,
+			'paid'     => 0,
 		);
 		$formats = array( '%d', '%s', '%f', '%d' );
-		if ( $paid && $has_paid_date ) {
-			$data['paid_date'] = current_time( 'Y-m-d' );
+		if ( $has_paid_date ) {
+			$data['paid_date'] = null;
 			$formats[]         = '%s';
 		}
 
-		$wpdb->insert( $table, $data, $formats );
+		$inserted = $wpdb->insert( $table, $data, $formats );
+		if ( false === $inserted ) {
+			return new WP_Error( 'insert_failed', 'Taksit kaydı oluşturulamadı.', array( 'status' => 500 ) );
+		}
+		$installment_id = (int) $wpdb->insert_id;
 
-		return rest_ensure_response( array( 'id' => $wpdb->insert_id ) );
+		if ( $requested_paid && $amount > 0 ) {
+			$payment_result = $this->create_installment_payment_internal(
+				$installment_id,
+				$amount,
+				$request->get_param( 'payment_date' ) ? sanitize_text_field( $request->get_param( 'payment_date' ) ) : null
+			);
+			if ( is_wp_error( $payment_result ) ) {
+				return $payment_result;
+			}
+		} else {
+			$this->recalculate_installment_payment_status( $installment_id );
+		}
+
+		return rest_ensure_response( array( 'id' => $installment_id ) );
 	}
 
 	public function update_installment( WP_REST_Request $request ) {
 		global $wpdb;
-		$table = $this->get_table( 'installments' );
-		$id    = absint( $request['id'] );
-		$has_paid_date = $this->ensure_installments_paid_date_column();
-
-		$select_fields = $has_paid_date ? 'id, paid, paid_date' : 'id, paid';
+		$table   = $this->get_table( 'installments' );
+		$pay_tbl = $this->get_table( 'installment_payments' );
+		$id      = absint( $request['id'] );
 		$existing = $wpdb->get_row(
-			$wpdb->prepare( "SELECT {$select_fields} FROM {$table} WHERE id = %d", $id ),
+			$wpdb->prepare( 'SELECT id, amount FROM ' . $table . ' WHERE id = %d', $id ),
 			ARRAY_A
 		);
 		if ( ! $existing ) {
@@ -1452,47 +1959,136 @@ class Pusula_Lite_API {
 
 		$data    = array();
 		$formats = array();
+		$should_recalculate = false;
 
 		if ( $request->has_param( 'due_date' ) ) {
 			$due              = $request->get_param( 'due_date' );
 			$data['due_date'] = $due ? sanitize_text_field( $due ) : null;
+			if ( $data['due_date'] && ! $this->is_valid_iso_date( $data['due_date'] ) ) {
+				return new WP_Error( 'invalid_due_date', 'Vade tarihi geçersiz.', array( 'status' => 400 ) );
+			}
 			$formats[]        = '%s';
 		}
 		if ( $request->has_param( 'amount' ) ) {
-			$data['amount'] = $request->get_param( 'amount' );
+			$data['amount'] = $this->to_money_float( $request->get_param( 'amount' ) );
 			$formats[]      = '%f';
-		}
-		if ( $request->has_param( 'paid' ) ) {
-			$paid         = (int) $request->get_param( 'paid' );
-			$data['paid'] = $paid;
-			$formats[]    = '%d';
-			if ( $has_paid_date ) {
-				if ( $paid ) {
-					$paid_date = $existing['paid_date'] ?? null;
-					if ( empty( $paid_date ) || (int) $existing['paid'] !== 1 ) {
-						$paid_date = current_time( 'Y-m-d' );
-					}
-					$data['paid_date'] = $paid_date;
-				} else {
-					$data['paid_date'] = null;
-				}
-				$formats[] = '%s';
-			}
+			$should_recalculate = true;
 		}
 
-		if ( empty( $data ) ) {
+		if ( ! empty( $data ) ) {
+			$wpdb->update(
+				$table,
+				$data,
+				array( 'id' => $id ),
+				$formats,
+				array( '%d' )
+			);
+		}
+
+		if ( $request->has_param( 'paid' ) ) {
+			$paid = (int) $request->get_param( 'paid' );
+			if ( 1 === $paid ) {
+				$installment = $this->get_installment_row_with_payments( $id, false );
+				if ( ! $installment ) {
+					return new WP_Error( 'not_found', 'Taksit bulunamadı.', array( 'status' => 404 ) );
+				}
+				$remaining = $this->to_money_float( $installment['remaining_amount'] );
+				if ( $remaining > 0 ) {
+					$payment_result = $this->create_installment_payment_internal(
+						$id,
+						$remaining,
+						$request->get_param( 'payment_date' ) ? sanitize_text_field( $request->get_param( 'payment_date' ) ) : null
+					);
+					if ( is_wp_error( $payment_result ) ) {
+						return $payment_result;
+					}
+				}
+			} else {
+				$wpdb->delete( $pay_tbl, array( 'installment_id' => $id ), array( '%d' ) );
+				$this->recalculate_installment_payment_status( $id );
+			}
+		} elseif ( $should_recalculate ) {
+			$this->recalculate_installment_payment_status( $id );
+		}
+
+		if ( empty( $data ) && ! $request->has_param( 'paid' ) ) {
 			return new WP_Error( 'no_fields', 'Güncellenecek alan bulunamadı.', array( 'status' => 400 ) );
 		}
 
-		$wpdb->update(
-			$table,
-			$data,
-			array( 'id' => $id ),
-			$formats,
-			array( '%d' )
+		return rest_ensure_response(
+			array(
+				'updated'     => true,
+				'installment' => $this->get_installment_row_with_payments( $id, true ),
+			)
 		);
+	}
 
-		return rest_ensure_response( array( 'updated' => true ) );
+	public function get_installment_payments( WP_REST_Request $request ) {
+		$id          = absint( $request['id'] );
+		$installment = $this->get_installment_row_with_payments( $id, true );
+		if ( ! $installment ) {
+			return new WP_Error( 'not_found', 'Taksit bulunamadı.', array( 'status' => 404 ) );
+		}
+
+		return rest_ensure_response(
+			array(
+				'installment' => $installment,
+				'payments'    => isset( $installment['payments'] ) ? $installment['payments'] : array(),
+			)
+		);
+	}
+
+	public function create_installment_payment( WP_REST_Request $request ) {
+		$id          = absint( $request['id'] );
+		$installment = $this->get_installment_row_with_payments( $id, false );
+		if ( ! $installment ) {
+			return new WP_Error( 'not_found', 'Taksit bulunamadı.', array( 'status' => 404 ) );
+		}
+
+		$remaining = $this->to_money_float( $installment['remaining_amount'] );
+		$amount    = $request->has_param( 'amount' )
+			? $this->to_money_float( $request->get_param( 'amount' ) )
+			: $remaining;
+
+		$result = $this->create_installment_payment_internal(
+			$id,
+			$amount,
+			$request->get_param( 'payment_date' ) ? sanitize_text_field( $request->get_param( 'payment_date' ) ) : null
+		);
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return rest_ensure_response( $result );
+	}
+
+	public function delete_installment_payment( WP_REST_Request $request ) {
+		global $wpdb;
+		$id         = absint( $request['id'] );
+		$payment_id = absint( $request['payment_id'] );
+		$pay_table  = $this->get_table( 'installment_payments' );
+
+		if ( ! $id || ! $payment_id ) {
+			return new WP_Error( 'invalid_payment', 'Geçersiz ödeme kaydı.', array( 'status' => 400 ) );
+		}
+
+		$payment = $wpdb->get_row(
+			$wpdb->prepare( "SELECT id, installment_id FROM {$pay_table} WHERE id = %d", $payment_id ),
+			ARRAY_A
+		);
+		if ( ! $payment || (int) $payment['installment_id'] !== $id ) {
+			return new WP_Error( 'not_found', 'Ödeme kaydı bulunamadı.', array( 'status' => 404 ) );
+		}
+
+		$wpdb->delete( $pay_table, array( 'id' => $payment_id ), array( '%d' ) );
+		$this->recalculate_installment_payment_status( $id );
+
+		return rest_ensure_response(
+			array(
+				'deleted'     => true,
+				'installment' => $this->get_installment_row_with_payments( $id, true ),
+			)
+		);
 	}
 
 	// ---------------------------------------------------------------------

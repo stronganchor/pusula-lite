@@ -15,6 +15,10 @@
     reportSales: [],
     expectedPayments: [],
     currentExpected: null,
+    currentInstallment: null,
+    currentInstallmentPayment: null,
+    pendingInstallmentId: null,
+    pendingPaymentId: null,
   };
 
   const apiBase = (window.PusulaApp && PusulaApp.apiBase) || '';
@@ -95,10 +99,24 @@
   const defaultDueDay = () => Math.min(new Date().getDate(), 28);
 
   const isPaid = (val) => Number(val) === 1;
+  const installmentAmount = (inst) => Number(inst && inst.amount ? inst.amount : 0);
+  const installmentPaidAmount = (inst) => {
+    if (!inst) return 0;
+    if (Number.isFinite(Number(inst.paid_amount))) return Number(inst.paid_amount);
+    const amount = installmentAmount(inst);
+    return isPaid(inst.paid) ? amount : 0;
+  };
+  const installmentRemainingAmount = (inst) => {
+    if (!inst) return 0;
+    if (Number.isFinite(Number(inst.remaining_amount))) return Math.max(0, Number(inst.remaining_amount));
+    const amount = installmentAmount(inst);
+    const paid = installmentPaidAmount(inst);
+    return Math.max(0, Math.round((amount - paid) * 100) / 100);
+  };
   const hasUnpaidInstallments = (sale) => {
     const insts = sale && sale.installments;
     if (!Array.isArray(insts) || !insts.length) return false;
-    return insts.some((inst) => !isPaid(inst.paid));
+    return insts.some((inst) => installmentRemainingAmount(inst) > 0);
   };
 
   function ensureLayoutFits() {
@@ -544,7 +562,7 @@
       </div>
       <div class="pusula-table-wrapper">
         <table class="pusula-table" id="pusula-search-table">
-          <thead><tr><th>No</th><th>Kayıt Tarihi</th><th>İsim</th><th>Telefon</th><th>Adres</th></tr></thead>
+          <thead><tr><th>No</th><th>Kayıt Tarihi</th><th>İsim</th><th>Telefon</th><th>Adres</th><th>Toplam Borç</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -594,7 +612,7 @@
     list.forEach((r) => {
       const tr = document.createElement('tr');
       const reg = r.registration_date ? fromISO(r.registration_date) : '';
-      tr.innerHTML = `<td>${r.id}</td><td>${reg}</td><td>${r.name || ''}</td><td>${r.phone || ''}</td><td>${r.address || ''}</td>`;
+      tr.innerHTML = `<td>${r.id}</td><td>${reg}</td><td>${r.name || ''}</td><td>${r.phone || ''}</td><td>${r.address || ''}</td><td>${formatMoney(r.debt_total || 0)}</td>`;
       if (Number(r.late_unpaid) === 1) tr.classList.add('late');
       const isSelected = state.selected && String(state.selected.id) === String(r.id);
       tr.addEventListener('click', () => {
@@ -630,7 +648,7 @@
       const msg = hasFilters ? 'Arama kriterlerine uygun müşteri bulunamadı.' : 'Henüz müşteri kaydı yok.';
       const tr = document.createElement('tr');
       tr.className = 'pusula-empty-row';
-      tr.innerHTML = `<td colspan="5" class="pusula-empty-cell">${msg}</td>`;
+      tr.innerHTML = `<td colspan="6" class="pusula-empty-cell">${msg}</td>`;
       tbody.appendChild(tr);
     }
 
@@ -989,6 +1007,7 @@
         notes: payload.notes,
         registration_date: payload.registration_date,
         contacts: payload.contacts || [],
+        debt_total: 0,
       };
       const existingIdx = state.customers.findIndex((c) => String(c.id) === String(newCust.id));
       if (existingIdx >= 0) {
@@ -1335,6 +1354,10 @@
           <span class="detail-label">Adres:</span>
           <span class="detail-value" data-field="address">-</span>
         </div>
+        <div class="detail-item">
+          <span class="detail-label">Toplam Borç:</span>
+          <span class="detail-value" data-field="debt_total">0,00₺</span>
+        </div>
       </div>
       <div class="detail-stack">
         <div class="detail-section">
@@ -1357,14 +1380,27 @@
           <div class="detail-section-header">
             <div class="detail-section-title">Taksitler</div>
             <div class="pusula-actions detail-actions">
-              <button id="btn-mark-paid" disabled>ÖDENDİ İŞARETLE</button>
-              <button id="btn-mark-unpaid" disabled>ÖDENMEDİ İŞARETLE</button>
+              <input type="number" step="0.01" min="0" id="inst-pay-amount" class="detail-inline-input" placeholder="Tahsilat Tutarı">
+              <button id="btn-add-payment" disabled>TAHSİLAT AL</button>
+              <button id="btn-mark-paid" disabled>KALANI TAHSİL ET</button>
+              <button id="btn-mark-unpaid" disabled>ÖDEMELERİ SIFIRLA</button>
               <button id="btn-print-inst" disabled>Makbuz Yazdır</button>
             </div>
           </div>
           <div class="pusula-table-wrapper">
             <table class="pusula-table" id="pusula-inst-table">
-              <thead><tr><th>Vade</th><th>Tutar</th><th>Durum</th></tr></thead>
+              <thead><tr><th>Vade</th><th>Taksit</th><th>Ödenen</th><th>Kalan</th><th>Durum</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-section-header">
+            <div class="detail-section-title">Tahsilat Geçmişi</div>
+          </div>
+          <div class="pusula-table-wrapper">
+            <table class="pusula-table" id="pusula-inst-payments-table">
+              <thead><tr><th>Tarih</th><th>Tutar</th><th>Kalan</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -1385,8 +1421,10 @@
     if (salePrintBtn) salePrintBtn.addEventListener('click', printReceipt);
     const deleteBtn = document.getElementById('btn-delete-sale');
     if (deleteBtn) deleteBtn.addEventListener('click', () => deleteSale(state.currentSale));
+    const addPaymentBtn = document.getElementById('btn-add-payment');
     const paidBtn = document.getElementById('btn-mark-paid');
     const unpaidBtn = document.getElementById('btn-mark-unpaid');
+    if (addPaymentBtn) addPaymentBtn.addEventListener('click', () => takeInstallmentPayment(false));
     if (paidBtn) paidBtn.addEventListener('click', () => toggleInstallmentPaid(true));
     if (unpaidBtn) unpaidBtn.addEventListener('click', () => toggleInstallmentPaid(false));
     const instPrintBtn = document.getElementById('btn-print-inst');
@@ -1399,18 +1437,51 @@
     if (!root) return;
     ['id','name','phone','address'].forEach((field) => {
       const el = root.querySelector(`[data-field="${field}"]`);
-      if (el) el.textContent = cust ? (cust[field] || '—') : '—';
+      if (!el) return;
+      el.textContent = cust ? (cust[field] || '—') : '—';
     });
+    const debtEl = root.querySelector('[data-field="debt_total"]');
+    if (debtEl) debtEl.textContent = cust ? formatMoney(cust.debt_total || 0) : formatMoney(0);
+  }
+
+  function computeCustomerDebtFromSales(sales) {
+    const rows = Array.isArray(sales) ? sales : [];
+    let total = 0;
+    rows.forEach((sale) => {
+      (sale.installments || []).forEach((inst) => {
+        total += installmentRemainingAmount(inst);
+      });
+    });
+    return Math.round(total * 100) / 100;
+  }
+
+  function syncSelectedCustomerDebt() {
+    if (!state.selected) return;
+    const debtTotal = computeCustomerDebtFromSales(state.sales || []);
+    state.selected.debt_total = debtTotal;
+    const selectedId = String(state.selected.id || '');
+    state.customers = (state.customers || []).map((c) => (
+      String(c.id || '') === selectedId ? { ...c, debt_total: debtTotal } : c
+    ));
+    state.customerBase = (state.customerBase || []).map((c) => (
+      String(c.id || '') === selectedId ? { ...c, debt_total: debtTotal } : c
+    ));
+    updateDetail(state.selected);
+    if (getActiveTabName() === 'search') {
+      renderTable(state.customers || []);
+    }
   }
 
   async function loadSales(customerId, selectedSaleId = null) {
     try {
       state.sales = await api(`/sales?customer_id=${customerId}&with=installments`);
       renderSalesTable(state.sales, { selectedSaleId });
+      syncSelectedCustomerDebt();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
       state.sales = [];
       renderSalesTable([], { selectedSaleId });
+      syncSelectedCustomerDebt();
     }
   }
 
@@ -1503,61 +1574,205 @@
     if (!tbody) return;
     tbody.innerHTML = '';
     state.currentInstallment = null;
-    const instPrintBtn = document.getElementById('btn-print-inst');
-    if (instPrintBtn) instPrintBtn.disabled = true;
-    const todayISO = formatISODate(new Date());
-    insts.forEach((i) => {
-      const tr = document.createElement('tr');
-      const paid = isPaid(i.paid);
-      tr.innerHTML = `<td>${fromISO(i.due_date)}</td><td>${formatMoney(i.amount || 0)}</td><td>${paid ? 'Ödendi' : 'Ödenmedi'}</td>`;
-      if (paid) tr.classList.add('paid');
-      if (!paid && i.due_date && i.due_date < todayISO) tr.classList.add('late');
-      tr.addEventListener('click', () => {
-        tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
-        tr.classList.add('selected');
-        tr.dataset.instId = i.id;
-        tr.dataset.saleId = i.sale_id || (state.currentSale && state.currentSale.id);
-        state.currentInstallment = i;
-        const btnPaid = document.getElementById('btn-mark-paid');
-        const btnUnpaid = document.getElementById('btn-mark-unpaid');
-        if (btnPaid && btnUnpaid) {
-          btnPaid.disabled = false;
-          btnUnpaid.disabled = false;
-        }
-        const instPrintBtn = document.getElementById('btn-print-inst');
-        if (instPrintBtn) instPrintBtn.disabled = !paid;
-      });
-      tbody.appendChild(tr);
-    });
+    state.currentInstallmentPayment = null;
+    renderInstallmentPayments([]);
+    const addBtn = document.getElementById('btn-add-payment');
     const btnPaid = document.getElementById('btn-mark-paid');
     const btnUnpaid = document.getElementById('btn-mark-unpaid');
+    const instPrintBtn = document.getElementById('btn-print-inst');
+    const payInput = document.getElementById('inst-pay-amount');
+    if (addBtn) addBtn.disabled = true;
     if (btnPaid) btnPaid.disabled = true;
     if (btnUnpaid) btnUnpaid.disabled = true;
-    if (!insts.length && instPrintBtn) instPrintBtn.disabled = true;
+    if (payInput) payInput.value = '';
+    if (instPrintBtn) instPrintBtn.disabled = true;
+    const todayISO = formatISODate(new Date());
+    const list = Array.isArray(insts) ? insts : [];
+    const preferredId = state.pendingInstallmentId ? String(state.pendingInstallmentId) : '';
+    let preferredRow = null;
+    let preferredInst = null;
+
+    const selectInstallment = (inst, tr) => {
+      tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
+      tr.classList.add('selected');
+      tr.dataset.instId = inst.id;
+      tr.dataset.saleId = inst.sale_id || (state.currentSale && state.currentSale.id);
+      state.currentInstallment = inst;
+      const remaining = installmentRemainingAmount(inst);
+      const paidAmount = installmentPaidAmount(inst);
+      const canPay = remaining > 0;
+      if (addBtn) addBtn.disabled = !canPay;
+      if (btnPaid) btnPaid.disabled = !canPay;
+      if (btnUnpaid) btnUnpaid.disabled = paidAmount <= 0;
+      if (payInput) payInput.value = canPay ? String(remaining) : '';
+      renderInstallmentPayments(inst.payments || [], inst);
+    };
+
+    list.forEach((i) => {
+      const tr = document.createElement('tr');
+      const amount = installmentAmount(i);
+      const paidAmount = installmentPaidAmount(i);
+      const remaining = installmentRemainingAmount(i);
+      const isFullyPaid = remaining <= 0;
+      const status = isFullyPaid ? 'Tamamlandı' : (paidAmount > 0 ? 'Kısmi Ödendi' : 'Ödenmedi');
+      tr.innerHTML = `<td>${fromISO(i.due_date)}</td><td>${formatMoney(amount)}</td><td>${formatMoney(paidAmount)}</td><td>${formatMoney(remaining)}</td><td>${status}</td>`;
+      if (isFullyPaid) tr.classList.add('paid');
+      if (!isFullyPaid && paidAmount > 0) tr.classList.add('partial');
+      if (!isFullyPaid && i.due_date && i.due_date < todayISO) tr.classList.add('late');
+      tr.addEventListener('click', () => {
+        selectInstallment(i, tr);
+      });
+      if (preferredId && String(i.id) === preferredId) {
+        preferredRow = tr;
+        preferredInst = i;
+      } else if (!preferredInst && remaining > 0) {
+        preferredRow = tr;
+        preferredInst = i;
+      } else if (!preferredInst) {
+        preferredRow = tr;
+        preferredInst = i;
+      }
+      tbody.appendChild(tr);
+    });
+
+    if (!list.length) {
+      const tr = document.createElement('tr');
+      tr.className = 'pusula-empty-row';
+      tr.innerHTML = '<td colspan="5" class="pusula-empty-cell">Taksit bulunamadı.</td>';
+      tbody.appendChild(tr);
+      renderInstallmentPayments([]);
+    } else if (preferredInst && preferredRow) {
+      selectInstallment(preferredInst, preferredRow);
+      if (state.pendingInstallmentId) {
+        try {
+          preferredRow.scrollIntoView({ block: 'nearest' });
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    state.pendingInstallmentId = null;
+    state.pendingPaymentId = null;
+  }
+
+  function renderInstallmentPayments(payments, installment = null) {
+    const tbody = document.querySelector('#pusula-inst-payments-table tbody');
+    const printBtn = document.getElementById('btn-print-inst');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    state.currentInstallmentPayment = null;
+    const list = Array.isArray(payments) ? payments : [];
+    const pendingPaymentId = state.pendingPaymentId ? String(state.pendingPaymentId) : '';
+    let preferredPayment = null;
+    let preferredRow = null;
+
+    const selectPayment = (payment, tr) => {
+      tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
+      tr.classList.add('selected');
+      state.currentInstallmentPayment = payment;
+      if (printBtn) printBtn.disabled = false;
+    };
+
+    list.forEach((payment) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${fromISO(payment.payment_date || '')}</td>
+        <td>${formatMoney(payment.amount || 0)}</td>
+        <td>${formatMoney(payment.remaining_after_payment || 0)}</td>
+      `;
+      tr.addEventListener('click', () => selectPayment(payment, tr));
+      if (pendingPaymentId && String(payment.id) === pendingPaymentId) {
+        preferredPayment = payment;
+        preferredRow = tr;
+      }
+      tbody.appendChild(tr);
+    });
+
+    if (!list.length) {
+      const tr = document.createElement('tr');
+      tr.className = 'pusula-empty-row';
+      tr.innerHTML = '<td colspan="3" class="pusula-empty-cell">Tahsilat kaydı yok.</td>';
+      tbody.appendChild(tr);
+      if (printBtn) printBtn.disabled = true;
+      return;
+    }
+
+    if (!preferredPayment && list.length) {
+      preferredPayment = list[list.length - 1];
+      preferredRow = tbody.querySelector('tr:last-child');
+    }
+    if (preferredPayment && preferredRow) {
+      selectPayment(preferredPayment, preferredRow);
+      if (pendingPaymentId) {
+        try {
+          preferredRow.scrollIntoView({ block: 'nearest' });
+        } catch (e) { /* ignore */ }
+      }
+    } else if (printBtn) {
+      const selectedInstallment = installment || state.currentInstallment;
+      const hasPayments = selectedInstallment && Array.isArray(selectedInstallment.payments) && selectedInstallment.payments.length > 0;
+      printBtn.disabled = !hasPayments;
+    }
   }
 
   async function toggleInstallmentPaid(paid) {
-    const tbody = document.querySelector('#pusula-inst-table tbody');
-    if (!tbody) return;
-    const selectedRow = Array.from(tbody.querySelectorAll('tr')).find((r) => r.classList.contains('selected'));
-    if (!selectedRow) return;
-    const instId = selectedRow.dataset.instId;
-    if (!instId) return;
+    const inst = state.currentInstallment;
+    if (!inst || !inst.id) return;
+    const instId = inst.id;
+    if (paid) {
+      await takeInstallmentPayment(true);
+      return;
+    }
+    if (installmentPaidAmount(inst) <= 0) return;
+    if (!window.confirm('Bu taksite ait tüm tahsilatlar silinecek. Devam edilsin mi?')) return;
     try {
       setInstallmentsLoading(true);
       await api(`/installments/${instId}`, {
         method: 'PUT',
-        body: JSON.stringify({ paid: paid ? 1 : 0 }),
+        body: JSON.stringify({ paid: 0 }),
       });
       setStatus('Taksit güncellendi.');
-      if (state.currentInstallment) state.currentInstallment.paid = paid ? 1 : 0;
+      state.pendingInstallmentId = instId;
+      state.pendingPaymentId = null;
+      if (state.selected) await loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
+    } catch (err) {
+      setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+    } finally {
+      setInstallmentsLoading(false);
+    }
+  }
 
-      if (paid && state.currentInstallment && state.selected) {
-        const due = state.currentInstallment.due_date;
-        const dt = parseISODate(due);
-        if (dt && window.confirm('Makbuz yazdırılsın mı?')) {
-          printPaymentReceiptForMonth(state.selected, dt.getFullYear(), dt.getMonth() + 1);
-        }
+  async function takeInstallmentPayment(useRemainingAmount = false) {
+    const inst = state.currentInstallment;
+    if (!inst || !inst.id) return;
+    const remaining = installmentRemainingAmount(inst);
+    if (!(remaining > 0)) return;
+
+    const inputEl = document.getElementById('inst-pay-amount');
+    const entered = Number(inputEl && inputEl.value !== '' ? inputEl.value : NaN);
+    const amount = useRemainingAmount
+      ? remaining
+      : (Number.isFinite(entered) && entered > 0 ? entered : remaining);
+    const normalizedAmount = Math.round(amount * 100) / 100;
+    const maxAmount = Math.round(remaining * 100) / 100;
+    if (!(normalizedAmount > 0) || normalizedAmount - maxAmount > 0.00001) {
+      setStatus('Tahsilat tutarı kalan borçtan büyük olamaz.', true);
+      return;
+    }
+
+    try {
+      setInstallmentsLoading(true);
+      const result = await api(`/installments/${inst.id}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: normalizedAmount }),
+      });
+      const payment = result && result.payment ? result.payment : null;
+      setStatus('Tahsilat kaydedildi.');
+      state.pendingInstallmentId = inst.id;
+      state.pendingPaymentId = payment && payment.id ? payment.id : null;
+
+      if (state.selected && payment && window.confirm('Makbuz yazdırılsın mı?')) {
+        const sale = findSaleByInstallmentId(inst.id);
+        printInstallmentPaymentReceipt(state.selected, result.installment || inst, payment, sale);
       }
 
       if (state.selected) await loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
@@ -1570,13 +1785,145 @@
 
   function printSelectedInstallmentReceipt() {
     if (!state.selected || !state.currentInstallment) return;
-    if (!isPaid(state.currentInstallment.paid)) return;
-    const dt = parseISODate(state.currentInstallment.due_date);
-    if (!dt) {
-      setStatus('Hata: Taksit tarihi bulunamadı.', true);
+    const inst = state.currentInstallment;
+    const selectedPayment = state.currentInstallmentPayment;
+    const fallbackPayment = Array.isArray(inst.payments) && inst.payments.length
+      ? inst.payments[inst.payments.length - 1]
+      : null;
+    const payment = selectedPayment || fallbackPayment;
+    if (!payment) {
+      setStatus('Hata: Yazdırılacak tahsilat bulunamadı.', true);
       return;
     }
-    printPaymentReceiptForMonth(state.selected, dt.getFullYear(), dt.getMonth() + 1);
+    const sale = findSaleByInstallmentId(inst.id);
+    printInstallmentPaymentReceipt(state.selected, inst, payment, sale);
+  }
+
+  function findSaleByInstallmentId(installmentId, salesList = null) {
+    const targetId = String(installmentId || '');
+    if (!targetId) return null;
+    const sales = Array.isArray(salesList) ? salesList : (state.sales || []);
+    for (let i = 0; i < sales.length; i += 1) {
+      const sale = sales[i];
+      const found = (sale.installments || []).find((inst) => String(inst.id || '') === targetId);
+      if (found) return sale;
+    }
+    return null;
+  }
+
+  function printInstallmentPaymentReceipt(customer, installment, payment, sale = null) {
+    if (!customer || !installment || !payment) return;
+    const company = getBusinessProfile();
+    const businessContactLine = buildBusinessContactLine(company);
+
+    const todayISO = formatISODate(new Date());
+    const paymentDate = payment.payment_date || todayISO;
+    const dueDate = installment.due_date || '';
+    const installmentAmountVal = installmentAmount(installment);
+    const paymentAmountVal = Number(payment.amount || 0);
+    const paidAfterVal = Number.isFinite(Number(payment.paid_after))
+      ? Number(payment.paid_after)
+      : (Number.isFinite(Number(payment.running_paid_amount)) ? Number(payment.running_paid_amount) : installmentPaidAmount(installment));
+    const remainingAfterVal = Number.isFinite(Number(payment.remaining_after_payment))
+      ? Number(payment.remaining_after_payment)
+      : Math.max(0, installmentAmountVal - paidAfterVal);
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const timeStr = `${hh}:${mm}`;
+
+    const html = `
+      <html><head><title> </title>
+      <style>
+        @page { size: A4; margin: 0; }
+        @media print {
+          .no-print { display:none; }
+          html, body { margin:0; padding:0; }
+        }
+        body { font-family: Arial, sans-serif; color:#000; margin:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .receipt { padding: 14mm; }
+        .no-print { font-size:12px; color:#000; margin:10px 0 14px; }
+        .brand { text-align:center; }
+        .brand .name { font-weight:700; font-size:18px; letter-spacing:1px; margin:0; }
+        .brand .line { font-size:11px; margin:3px 0 0; }
+        .rule { border-top:2px solid #000; margin:10px 0 12px; }
+        .title { text-align:center; font-weight:700; font-size:14px; margin:0 0 10px; }
+        .meta-row { display:flex; justify-content:space-between; font-size:12px; margin:6px 0 10px; }
+        .info { font-size:12px; margin:6px 0 12px; }
+        .info .row { display:flex; gap:10px; margin:4px 0; }
+        .info .label { width:120px; }
+        table { width:100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { border:1px solid #000; padding:6px 8px; font-size:12px; text-align:left; }
+        th { font-weight:700; }
+        .totals { margin-top: 12px; font-size:12px; }
+        .totals .row { display:flex; justify-content:space-between; margin:6px 0; }
+        .totals .grand { font-weight:700; border-top:2px solid #000; padding-top:8px; margin-top:8px; }
+        .footer-rule { border-top:2px solid #000; margin:18px 0 10px; }
+        .footer { text-align:center; font-size:11px; }
+        .footer .thanks { margin:0 0 10px; }
+        .footer .name { font-weight:700; letter-spacing:1px; margin:0; }
+        .footer .sub { margin:4px 0 0; color:#000; }
+      </style></head><body>
+      <div class="receipt">
+        <div class="no-print">Not: Yazdırma ekranında “Üstbilgi ve altbilgiler” seçeneğini kapatın.</div>
+        <div class="brand">
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.address ? `<p class="line">${company.address}</p>` : ''}
+          ${businessContactLine ? `<p class="line">${businessContactLine}</p>` : ''}
+        </div>
+        <div class="rule"></div>
+        <p class="title">Taksit Tahsilat Makbuzu</p>
+        <div class="meta-row">
+          <div><strong>Tarih:</strong> ${fromISOSlash(paymentDate)}</div>
+          <div><strong>Saat:</strong> ${timeStr}</div>
+        </div>
+        <div class="info">
+          <div class="row"><div class="label"><strong>Makbuz No:</strong></div><div>${payment.id || ''}</div></div>
+          <div class="row"><div class="label"><strong>Hesap No:</strong></div><div>${customer.id || ''}</div></div>
+          <div class="row"><div class="label"><strong>Müşteri:</strong></div><div>${customer.name || ''}</div></div>
+          <div class="row"><div class="label"><strong>Adres:</strong></div><div>${customer.address || ''}</div></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Satış No</th>
+              <th>Vade</th>
+              <th>Taksit Tutarı</th>
+              <th>Ödeme Tutarı</th>
+              <th>Kalan</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>${sale && sale.id ? sale.id : (installment.sale_id || '')}</td>
+              <td>${fromISOSlash(dueDate)}</td>
+              <td>${formatMoney(installmentAmountVal)}</td>
+              <td>${formatMoney(paymentAmountVal)}</td>
+              <td>${formatMoney(remainingAfterVal)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="totals">
+          <div class="row"><div><strong>Toplam Ödenen:</strong></div><div>${formatMoney(paidAfterVal)}</div></div>
+          <div class="row grand"><div><strong>Kalan Borç:</strong></div><div>${formatMoney(remainingAfterVal)}</div></div>
+        </div>
+        <div class="footer-rule"></div>
+        <div class="footer">
+          <p class="thanks">Mağazamızdan yapmış olduğunuz ödeme için teşekkür ederiz</p>
+          ${company.name ? `<p class="name">${company.name}</p>` : ''}
+          ${company.footerSub ? `<p class="sub">${company.footerSub}</p>` : ''}
+        </div>
+      </div>
+      </body></html>`;
+
+    const w = window.open('', '_blank');
+    if (w) {
+      try { w.document.title = ''; } catch (e) { /* ignore */ }
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      w.print();
+    }
   }
 
   function trMonthName(month1to12) {
@@ -2127,8 +2474,9 @@
       </div>
       <div class="pusula-summary"><span id="exp-total">0,00₺</span> — <span id="exp-count">0</span> taksit</div>
       <div class="pusula-actions expected-actions">
-        <button id="exp-mark-paid" disabled>ÖDENDİ İŞARETLE</button>
-        <button id="exp-mark-unpaid" disabled>ÖDENMEDİ İŞARETLE</button>
+        <input type="number" step="0.01" min="0" id="exp-pay-amount" class="detail-inline-input" placeholder="Tahsilat Tutarı">
+        <button id="exp-mark-paid" disabled>TAHSİLAT AL</button>
+        <button id="exp-mark-unpaid" disabled>SON ÖDEMEYİ GERİ AL</button>
         <button id="exp-print" disabled>Makbuz Yazdır</button>
       </div>
       <div class="pusula-table-wrapper">
@@ -2137,6 +2485,8 @@
             <tr>
               <th>Vade</th>
               <th>Taksit</th>
+              <th>Ödenen</th>
+              <th>Kalan</th>
               <th>Müşteri No</th>
               <th>Müşteri</th>
               <th>Telefon</th>
@@ -2232,26 +2582,25 @@
     const markPaidBtn = document.getElementById('exp-mark-paid');
     const markUnpaidBtn = document.getElementById('exp-mark-unpaid');
     const printBtn = document.getElementById('exp-print');
+    const payInput = document.getElementById('exp-pay-amount');
     if (markPaidBtn) markPaidBtn.disabled = true;
     if (markUnpaidBtn) markUnpaidBtn.disabled = true;
     if (printBtn) printBtn.disabled = true;
+    if (payInput) payInput.value = '';
     const hideLate = Boolean(document.getElementById('exp-hide-late')?.checked);
     const todayISO = formatISODate(new Date());
     const lateCustomers = new Set();
     state.expectedPayments.forEach((row) => {
-      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
-      const isPaidToday = isPaid(row && row.paid) && paidDate === todayISO;
-      if (row && row.due_date && row.due_date < todayISO && !isPaidToday) {
+      const remaining = installmentRemainingAmount(row);
+      if (row && row.due_date && row.due_date < todayISO && remaining > 0) {
         lateCustomers.add(String(row.customer_id || ''));
       }
     });
     const visibleRows = state.expectedPayments.filter((row) => {
-      const isLatePayment = row && row.due_date && row.due_date < todayISO;
-      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
-      const isPaidToday = isPaid(row && row.paid) && paidDate === todayISO;
-      return !(hideLate && isLatePayment && !isPaidToday);
+      const isLatePayment = row && row.due_date && row.due_date < todayISO && installmentRemainingAmount(row) > 0;
+      return !(hideLate && isLatePayment);
     });
-    const total = visibleRows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const total = visibleRows.reduce((sum, r) => sum + installmentRemainingAmount(r), 0);
     const totalEl = document.getElementById('exp-total');
     const countEl = document.getElementById('exp-count');
     if (totalEl) totalEl.textContent = formatMoney(total);
@@ -2260,18 +2609,24 @@
       const tr = document.createElement('tr');
       const due = row && row.due_date ? fromISO(row.due_date) : '';
       const saleDate = row && row.sale_date ? fromISO(row.sale_date) : '';
-      const amount = formatMoney(row && row.amount ? row.amount : 0);
+      const amount = formatMoney(row && (row.installment_amount ?? row.amount) ? (row.installment_amount ?? row.amount) : 0);
+      const paidAmount = formatMoney(installmentPaidAmount(row));
+      const remainingAmount = formatMoney(installmentRemainingAmount(row));
       const saleTotal = formatMoney(row && row.sale_total ? row.sale_total : 0);
       const desc = truncateDescription(row && row.sale_description ? row.sale_description : '');
       const address = [row && row.customer_address ? row.customer_address : '', row && row.customer_work_address ? row.customer_work_address : '']
         .filter(Boolean)
         .join(' / ');
-      const paidDate = row && row.paid_date ? String(row.paid_date) : '';
-      const isPaidRow = isPaid(row && row.paid);
-      const isPaidToday = isPaidRow && paidDate === todayISO;
+      const remaining = installmentRemainingAmount(row);
+      const isPaidRow = remaining <= 0;
+      const lastPaymentDate = row && row.last_payment_date ? String(row.last_payment_date) : '';
+      const canUndoToday = Boolean(row && row.last_payment_id) && lastPaymentDate === todayISO;
+      const isPaidToday = isPaidRow && canUndoToday;
       tr.innerHTML = `
         <td>${due}</td>
         <td>${amount}</td>
+        <td>${paidAmount}</td>
+        <td>${remainingAmount}</td>
         <td>${row && row.customer_id ? row.customer_id : ''}</td>
         <td>${row && row.customer_name ? row.customer_name : ''}</td>
         <td>${row && row.customer_phone ? row.customer_phone : ''}</td>
@@ -2281,19 +2636,22 @@
         <td>${saleTotal}</td>
         <td>${desc}</td>
       `;
-      const isLatePayment = row && row.due_date && row.due_date < todayISO;
+      const isLatePayment = row && row.due_date && row.due_date < todayISO && remaining > 0;
       if (isPaidToday) {
         tr.classList.add('paid-today');
       } else if (isLatePayment || lateCustomers.has(String(row && row.customer_id ? row.customer_id : ''))) {
         tr.classList.add('late');
+      } else if (!isPaidRow && installmentPaidAmount(row) > 0) {
+        tr.classList.add('partial');
       }
       tr.addEventListener('click', () => {
         state.currentExpected = row;
         tbody.querySelectorAll('tr').forEach((r) => r.classList.remove('selected'));
         tr.classList.add('selected');
+        if (payInput) payInput.value = remaining > 0 ? String(Math.round(remaining * 100) / 100) : '';
         if (markPaidBtn) markPaidBtn.disabled = isPaidRow;
-        if (markUnpaidBtn) markUnpaidBtn.disabled = !isPaidToday;
-        if (printBtn) printBtn.disabled = !isPaidRow;
+        if (markUnpaidBtn) markUnpaidBtn.disabled = !canUndoToday;
+        if (printBtn) printBtn.disabled = !Boolean(row && row.last_payment_id);
       });
       tr.addEventListener('dblclick', (e) => {
         e.preventDefault();
@@ -2304,7 +2662,7 @@
     if (!visibleRows.length) {
       const tr = document.createElement('tr');
       tr.className = 'pusula-empty-row';
-      tr.innerHTML = '<td colspan="10" class="pusula-empty-cell">Beklenen ödeme bulunamadı.</td>';
+      tr.innerHTML = '<td colspan="12" class="pusula-empty-cell">Beklenen ödeme bulunamadı.</td>';
       tbody.appendChild(tr);
     }
   }
@@ -2317,6 +2675,7 @@
       phone: row.customer_phone || '',
       address: row.customer_address || '',
       work_address: row.customer_work_address || '',
+      debt_total: 0,
     };
     state.selected = cust;
     state.pendingCustomerId = null;
@@ -2328,26 +2687,27 @@
 
   async function printExpectedPaymentReceipt(row) {
     const target = row || state.currentExpected;
-    if (!target || !isPaid(target.paid)) return;
-    const dt = parseISODate(target.due_date);
-    if (!dt) {
-      setStatus('Hata: Taksit tarihi bulunamadı.', true);
+    if (!target || !target.installment_id) return;
+    if (!target.last_payment_id) {
+      setStatus('Hata: Yazdırılacak tahsilat bulunamadı.', true);
       return;
     }
-    const cust = {
-      id: target.customer_id,
-      name: target.customer_name || '',
-      address: target.customer_address || '',
-    };
     try {
-      const sales = await fetchSalesForCustomer(target.customer_id);
-      printPaymentReceiptForMonth(
-        cust,
-        dt.getFullYear(),
-        dt.getMonth() + 1,
-        sales,
-        target
-      );
+      const payload = await api(`/installments/${target.installment_id}/payments`);
+      const installment = payload && payload.installment ? payload.installment : target;
+      const payments = payload && Array.isArray(payload.payments) ? payload.payments : [];
+      const payment = payments.find((p) => String(p.id) === String(target.last_payment_id)) || payments[payments.length - 1];
+      if (!payment) {
+        setStatus('Hata: Tahsilat kaydı bulunamadı.', true);
+        return;
+      }
+      const cust = {
+        id: target.customer_id,
+        name: target.customer_name || '',
+        address: target.customer_address || '',
+      };
+      const sale = findSaleByInstallmentId(installment.id) || { id: target.sale_id };
+      printInstallmentPaymentReceipt(cust, installment, payment, sale);
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     }
@@ -2355,24 +2715,51 @@
 
   async function markExpectedPaymentPaid() {
     if (!state.currentExpected || !state.currentExpected.installment_id) return;
-    const instId = state.currentExpected.installment_id;
+    const target = state.currentExpected;
+    const instId = target.installment_id;
+    const remaining = installmentRemainingAmount(target);
+    if (!(remaining > 0)) return;
+    const inputEl = document.getElementById('exp-pay-amount');
+    const entered = Number(inputEl && inputEl.value !== '' ? inputEl.value : NaN);
+    const amount = Number.isFinite(entered) && entered > 0 ? entered : remaining;
+    const normalizedAmount = Math.round(amount * 100) / 100;
+    if (!(normalizedAmount > 0) || normalizedAmount - remaining > 0.00001) {
+      setStatus('Tahsilat tutarı kalan borçtan büyük olamaz.', true);
+      return;
+    }
     try {
       setExpectedLoading(true);
-      await api(`/installments/${instId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ paid: 1 }),
+      const result = await api(`/installments/${instId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: normalizedAmount }),
       });
-      setStatus('Ödeme güncellendi.');
-      const todayISO = formatISODate(new Date());
-      const updatedRow = { ...state.currentExpected, paid: 1, paid_date: todayISO };
-      state.expectedPayments = (state.expectedPayments || []).map((row) => {
-        if (String(row.installment_id) !== String(instId)) return row;
-        return { ...row, paid: 1, paid_date: todayISO };
-      });
+      setStatus('Tahsilat kaydedildi.');
+      const payment = result && result.payment ? result.payment : null;
+      const updatedInstallment = result && result.installment ? result.installment : null;
+      const updatedRow = {
+        ...target,
+        ...(updatedInstallment || {}),
+        last_payment_id: payment && payment.id ? payment.id : target.last_payment_id,
+        last_payment_amount: payment && payment.amount ? payment.amount : target.last_payment_amount,
+        last_payment_date: payment && payment.payment_date ? payment.payment_date : target.last_payment_date,
+      };
       state.currentExpected = null;
-      renderExpectedPaymentsTable();
+      await loadExpectedPayments({ silent: true, showLoading: false });
+      if (state.selected && String(state.selected.id || '') === String(target.customer_id || '')) {
+        await loadSales(target.customer_id, target.sale_id || null);
+      }
       if (window.confirm('Makbuz yazdırılsın mı?')) {
-        await printExpectedPaymentReceipt(updatedRow);
+        const cust = {
+          id: target.customer_id,
+          name: target.customer_name || '',
+          address: target.customer_address || '',
+        };
+        const sale = findSaleByInstallmentId(instId) || { id: target.sale_id };
+        if (payment) {
+          printInstallmentPaymentReceipt(cust, updatedInstallment || target, payment, sale);
+        } else {
+          await printExpectedPaymentReceipt(updatedRow);
+        }
       }
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
@@ -2383,23 +2770,23 @@
 
   async function markExpectedPaymentUnpaid() {
     if (!state.currentExpected || !state.currentExpected.installment_id) return;
-    const instId = state.currentExpected.installment_id;
+    const target = state.currentExpected;
+    const instId = target.installment_id;
     const todayISO = formatISODate(new Date());
-    const paidDate = state.currentExpected.paid_date ? String(state.currentExpected.paid_date) : '';
-    if (!isPaid(state.currentExpected.paid) || paidDate !== todayISO) return;
+    const lastPaymentDate = target.last_payment_date ? String(target.last_payment_date) : '';
+    const paymentId = target.last_payment_id;
+    if (!paymentId || lastPaymentDate !== todayISO) return;
     try {
       setExpectedLoading(true);
-      await api(`/installments/${instId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ paid: 0 }),
+      await api(`/installments/${instId}/payments/${paymentId}`, {
+        method: 'DELETE',
       });
       setStatus('Ödeme güncellendi.');
-      state.expectedPayments = (state.expectedPayments || []).map((row) => {
-        if (String(row.installment_id) !== String(instId)) return row;
-        return { ...row, paid: 0, paid_date: null };
-      });
       state.currentExpected = null;
-      renderExpectedPaymentsTable();
+      await loadExpectedPayments({ silent: true, showLoading: false });
+      if (state.selected && String(state.selected.id || '') === String(target.customer_id || '')) {
+        await loadSales(target.customer_id, target.sale_id || null);
+      }
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {

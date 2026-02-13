@@ -419,19 +419,22 @@ html, body {
   border: 1px solid #2f3a4f;
 }
 #pusula-search-table {
-  min-width: 760px;
+  min-width: 920px;
 }
 #pusula-sales-table {
   min-width: 640px;
 }
 #pusula-inst-table {
-  min-width: 420px;
+  min-width: 760px;
+}
+#pusula-inst-payments-table {
+  min-width: 480px;
 }
 #rep-table {
   min-width: 760px;
 }
 #exp-table {
-  min-width: 1320px;
+  min-width: 1520px;
 }
 .pusula-table tr.selected {
   background: #283345;
@@ -447,6 +450,9 @@ html, body {
   color: #8fc48f;
   font-weight: 700;
   text-decoration: line-through;
+}
+.pusula-table tr.partial td {
+  color: #9fd6ff;
 }
 .pusula-table tr:hover {
   background: #223042;
@@ -848,6 +854,12 @@ html, body {
 .detail-actions {
   margin-top: 0;
   justify-content: flex-end;
+}
+.detail-inline-input {
+  width: 160px;
+}
+.expected-actions {
+  align-items: center;
 }
 #pusula-tab-add {
   display: flex;
