@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.3.1
+ * Version: 1.3.2
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,7 +58,7 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION                      = '1.3.1';
+	const VERSION                      = '1.3.2';
 	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
 	const OPTION_KEY                   = 'pusula_lite_api_key';
 	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';

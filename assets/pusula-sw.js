@@ -2,6 +2,7 @@ const PUSULA_SHELL_CACHE = 'pusula-lite-shell-v1';
 const PUSULA_OFFLINE_DB = 'pusula-lite-offline';
 const PUSULA_OFFLINE_STORE = 'kv';
 const PUSULA_CONFIG_KEY = 'sw-config';
+const PUSULA_SHELL_FALLBACK_KEY = '__pusula-lite-shell__';
 
 function normalizeUrl(input) {
   try {
@@ -144,6 +145,12 @@ async function handleLogout(request) {
 }
 
 async function getCachedShellResponse(cache, shellUrl, requestUrl) {
+  const fallbackKey = new Request(`${self.location.origin}/${PUSULA_SHELL_FALLBACK_KEY}`);
+  const cachedFallback = await cache.match(fallbackKey);
+  if (cachedFallback) {
+    return cachedFallback;
+  }
+
   if (shellUrl) {
     const cachedShell = await cache.match(shellUrl);
     if (cachedShell) {
@@ -163,6 +170,8 @@ async function handleShellNavigation(request, config) {
   const shellUrl = normalizeUrl(config && config.shellUrl);
   const requestUrl = normalizeUrl(request.url);
   const cache = await caches.open(PUSULA_SHELL_CACHE);
+  const fallbackKey = new Request(`${self.location.origin}/${PUSULA_SHELL_FALLBACK_KEY}`);
+  const shouldUpdateShellCache = Boolean(shellUrl && requestUrl === shellUrl);
 
   try {
     const response = await fetch(request);
@@ -172,8 +181,9 @@ async function handleShellNavigation(request, config) {
         return cached;
       }
     }
-    if (response && response.ok && shellUrl) {
+    if (response && response.ok && shouldUpdateShellCache) {
       await cache.put(shellUrl, response.clone());
+      await cache.put(fallbackKey, response.clone());
     }
     return response;
   } catch (error) {
@@ -259,7 +269,7 @@ self.addEventListener('fetch', (event) => {
     const shellUrl = normalizeUrl(config.shellUrl || '');
     const assetUrls = Array.isArray(config.assetUrls) ? config.assetUrls : [];
 
-    if (request.mode === 'navigate' && shellUrl && requestUrl === shellUrl) {
+    if (request.mode === 'navigate' && shellUrl) {
       return handleShellNavigation(request, config);
     }
 

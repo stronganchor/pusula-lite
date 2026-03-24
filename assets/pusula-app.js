@@ -253,9 +253,10 @@
       return;
     }
 
+    const shellUrl = normalizeUrl(`${window.location.origin}${window.location.pathname}`);
     const payload = {
       type: 'CONFIGURE_OFFLINE',
-      shellUrl: normalizeUrl(window.location.href),
+      shellUrl,
       assetUrls: offlineAssetUrls.map((url) => normalizeUrl(url)).filter(Boolean),
     };
 
@@ -296,12 +297,12 @@
     }
 
     const suffix = state.offlineLastSyncedAt
-      ? ` Son eşitleme: ${formatSyncDate(state.offlineLastSyncedAt)}.`
+      ? ` Son senkronizasyon: ${formatSyncDate(state.offlineLastSyncedAt)}.`
       : '';
 
     banner.hidden = false;
     banner.textContent = state.hasOfflineSnapshot
-      ? `Çevrimdışı mod etkin. Veriler salt okunur gösteriliyor.${suffix}`
+      ? `Çevrimdışı mod açık. Veriler yalnızca görüntülenebilir.${suffix}`
       : 'Çevrimdışı mod etkin, ancak tarayıcıda kayıtlı veri bulunamadı.';
   }
 
