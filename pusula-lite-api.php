@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,7 +58,7 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION                      = '1.2.0';
+	const VERSION                      = '1.3.0';
 	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
 	const OPTION_KEY                   = 'pusula_lite_api_key';
 	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';
@@ -84,6 +84,7 @@ class Pusula_Lite_API {
 		add_action( 'admin_menu', array( $this, 'register_admin_page' ) );
 		add_shortcode( 'pusula_lite_app', array( $this, 'render_shortcode' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'register_assets' ) );
+		add_action( 'template_redirect', array( $this, 'maybe_serve_service_worker' ), 0 );
 	}
 
 	// ---------------------------------------------------------------------
@@ -471,6 +472,94 @@ class Pusula_Lite_API {
 		);
 	}
 
+	private function get_service_worker_url() {
+		return add_query_arg( 'pusula_lite_sw', '1', home_url( '/' ) );
+	}
+
+	private function get_app_asset_urls() {
+		$css_path = plugin_dir_path( __FILE__ ) . 'assets/pusula-app.css';
+		$js_path  = plugin_dir_path( __FILE__ ) . 'assets/pusula-app.js';
+		$css_ver  = file_exists( $css_path ) ? filemtime( $css_path ) : self::VERSION;
+		$js_ver   = file_exists( $js_path ) ? filemtime( $js_path ) : self::VERSION;
+
+		return array(
+			add_query_arg( 'ver', rawurlencode( (string) $css_ver ), plugins_url( 'assets/pusula-app.css', __FILE__ ) ),
+			add_query_arg( 'ver', rawurlencode( (string) $js_ver ), plugins_url( 'assets/pusula-app.js', __FILE__ ) ),
+		);
+	}
+
+	private function render_logged_out_cleanup_script() {
+		$sw_url = esc_url_raw( $this->get_service_worker_url() );
+		ob_start();
+		?>
+		<script>
+		(() => {
+			const dbName = 'pusula-lite-offline';
+			const shouldClearCache = (key) => String(key || '').indexOf('pusula-lite') !== -1;
+			const clearDb = () => {
+				try {
+					if (window.indexedDB) {
+						window.indexedDB.deleteDatabase(dbName);
+					}
+				} catch (e) {
+					// ignore
+				}
+			};
+			const clearCaches = async () => {
+				if (!('caches' in window)) {
+					return;
+				}
+				try {
+					const keys = await caches.keys();
+					await Promise.all(keys.filter(shouldClearCache).map((key) => caches.delete(key)));
+				} catch (e) {
+					// ignore
+				}
+			};
+			clearDb();
+			clearCaches();
+			if (!('serviceWorker' in navigator)) {
+				return;
+			}
+			try {
+				if (navigator.serviceWorker.controller) {
+					navigator.serviceWorker.controller.postMessage({ type: 'PURGE_OFFLINE' });
+				}
+			} catch (e) {
+				// ignore
+			}
+			navigator.serviceWorker.getRegistrations().then((registrations) => Promise.all(
+				registrations
+					.filter((registration) => {
+						const active = registration && registration.active ? registration.active : null;
+						return active && String(active.scriptURL || '').indexOf(<?php echo wp_json_encode( $sw_url ); ?>) !== -1;
+					})
+					.map((registration) => registration.unregister())
+			)).catch(() => {});
+		})();
+		</script>
+		<?php
+		return ob_get_clean();
+	}
+
+	public function maybe_serve_service_worker() {
+		if ( empty( $_GET['pusula_lite_sw'] ) ) {
+			return;
+		}
+
+		$sw_path = plugin_dir_path( __FILE__ ) . 'assets/pusula-sw.js';
+		if ( ! file_exists( $sw_path ) ) {
+			status_header( 404 );
+			exit;
+		}
+
+		nocache_headers();
+		header( 'Content-Type: application/javascript; charset=utf-8' );
+		header( 'Service-Worker-Allowed: /' );
+		readfile( $sw_path );
+		exit;
+	}
+
 	public function render_shortcode() {
 		if ( ! is_user_logged_in() ) {
 			wp_enqueue_style( 'pusula-lite-app' );
@@ -556,6 +645,7 @@ class Pusula_Lite_API {
 					</form>
 				</div>
 			</div>
+			<?php echo $this->render_logged_out_cleanup_script(); ?>
 			<?php
 			return ob_get_clean();
 		}
@@ -569,6 +659,7 @@ class Pusula_Lite_API {
 		wp_enqueue_script( 'pusula-lite-app' );
 
 		$business_profile = self::get_business_profile();
+		$offline_assets   = $this->get_app_asset_urls();
 		wp_localize_script(
 			'pusula-lite-app',
 			'PusulaApp',
@@ -581,6 +672,11 @@ class Pusula_Lite_API {
 					'phone'     => $business_profile['phone'],
 					'website'   => $business_profile['website'],
 					'footerSub' => $business_profile['footer_sub'],
+				),
+				'offline'  => array(
+					'enabled'   => true,
+					'swUrl'     => esc_url_raw( $this->get_service_worker_url() ),
+					'assetUrls' => array_values( array_filter( array_map( 'esc_url_raw', $offline_assets ) ) ),
 				),
 			)
 		);
@@ -610,6 +706,7 @@ class Pusula_Lite_API {
 				</div>
 				<div class="pusula-status" id="pusula-status"></div>
 			</div>
+			<div class="pusula-offline-banner" id="pusula-offline-banner" hidden></div>
 			<div class="pusula-tab-content" id="pusula-tab-search"></div>
 			<div class="pusula-tab-content" id="pusula-tab-add" style="display:none"></div>
 			<div class="pusula-tab-content" id="pusula-tab-sale" style="display:none"></div>
@@ -791,6 +888,16 @@ class Pusula_Lite_API {
 					'start' => array( 'sanitize_callback' => 'sanitize_text_field' ),
 					'end'   => array( 'sanitize_callback' => 'sanitize_text_field' ),
 				),
+			)
+		);
+
+		register_rest_route(
+			$namespace,
+			'/offline-snapshot',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_offline_snapshot' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
 			)
 		);
 
@@ -1248,6 +1355,110 @@ class Pusula_Lite_API {
 		return $rows;
 	}
 
+	private function enrich_customers_with_late_flags( array $rows ) {
+		global $wpdb;
+		$ids = array_map( 'intval', wp_list_pluck( $rows, 'id' ) );
+		$ids = array_values( array_filter( $ids ) );
+
+		if ( empty( $ids ) ) {
+			return $rows;
+		}
+
+		$sales_table  = $this->get_table( 'sales' );
+		$inst_table   = $this->get_table( 'installments' );
+		$pay_table    = $this->get_table( 'installment_payments' );
+		$today        = current_time( 'Y-m-d' );
+		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		$params       = array_merge( $ids, array( $today ) );
+		$late_ids     = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT DISTINCT s.customer_id
+				 FROM {$sales_table} s
+				 INNER JOIN {$inst_table} i ON i.sale_id = s.id
+				 LEFT JOIN (
+				 	SELECT installment_id, SUM(amount) AS paid_total
+				 	FROM {$pay_table}
+				 	GROUP BY installment_id
+				 ) p ON p.installment_id = i.id
+				 WHERE s.customer_id IN ({$placeholders})
+				   AND COALESCE(i.amount, 0) - COALESCE(p.paid_total, 0) > 0
+				   AND i.due_date IS NOT NULL
+				   AND i.due_date < %s",
+				$params
+			)
+		);
+
+		$late_lookup = $late_ids ? array_fill_keys( array_map( 'intval', $late_ids ), true ) : array();
+
+		foreach ( $rows as &$row ) {
+			$row['late_unpaid'] = ! empty( $late_lookup[ (int) $row['id'] ] ) ? 1 : 0;
+		}
+		unset( $row );
+
+		return $rows;
+	}
+
+	private function get_expected_payment_rows( $start = '', $end = '' ) {
+		global $wpdb;
+		$sales_table      = $this->get_table( 'sales' );
+		$inst_table       = $this->get_table( 'installments' );
+		$cust_table       = $this->get_table( 'customers' );
+		$today            = current_time( 'Y-m-d' );
+		$has_paid_date    = $this->ensure_installments_paid_date_column();
+		$where            = array( 'i.due_date IS NOT NULL' );
+		$params           = array();
+		$paid_date_select = $has_paid_date ? 'i.paid_date' : 'NULL AS paid_date';
+
+		if ( $start ) {
+			$where[]  = 'i.due_date >= %s';
+			$params[] = sanitize_text_field( $start );
+		}
+		if ( $end ) {
+			$where[]  = 'i.due_date <= %s';
+			$params[] = sanitize_text_field( $end );
+		}
+
+		$sql = "SELECT
+				i.id AS installment_id,
+				i.due_date,
+				i.amount,
+				i.paid,
+				{$paid_date_select},
+				s.id AS sale_id,
+				s.date AS sale_date,
+				s.total AS sale_total,
+				s.description AS sale_description,
+				c.id AS customer_id,
+				c.name AS customer_name,
+				c.phone AS customer_phone,
+				c.address AS customer_address,
+				c.work_address AS customer_work_address
+			FROM {$inst_table} i
+			INNER JOIN {$sales_table} s ON s.id = i.sale_id
+			INNER JOIN {$cust_table} c ON c.id = s.customer_id
+			WHERE " . implode( ' AND ', $where ) . '
+			ORDER BY i.due_date ASC, i.id ASC';
+
+		if ( $params ) {
+			$sql = $wpdb->prepare( $sql, $params );
+		}
+
+		$rows     = $wpdb->get_results( $sql, ARRAY_A );
+		$rows     = $this->enrich_installments_with_payment_data( $rows, 'installment_id', false );
+		$filtered = array();
+		foreach ( $rows as $row ) {
+			$remaining     = $this->to_money_float( isset( $row['remaining_amount'] ) ? $row['remaining_amount'] : 0 );
+			$paid_date     = isset( $row['paid_date'] ) ? (string) $row['paid_date'] : '';
+			$is_paid_today = $remaining <= 0.00001 && $paid_date === $today;
+			if ( $remaining > 0.00001 || $is_paid_today ) {
+				$row['installment_amount'] = $this->to_money_float( isset( $row['amount'] ) ? $row['amount'] : 0 );
+				$filtered[]                = $row;
+			}
+		}
+
+		return $filtered;
+	}
+
 	// ---------------------------------------------------------------------
 	// Customers
 	// ---------------------------------------------------------------------
@@ -1346,41 +1557,7 @@ class Pusula_Lite_API {
 			unset( $row );
 		}
 		if ( $with_late && $rows ) {
-			$ids = array_map( 'intval', wp_list_pluck( $rows, 'id' ) );
-			$ids = array_values( array_filter( $ids ) );
-			$late_lookup = array();
-			if ( $ids ) {
-				$sales_table = $this->get_table( 'sales' );
-				$inst_table  = $this->get_table( 'installments' );
-				$pay_table   = $this->get_table( 'installment_payments' );
-				$today       = current_time( 'Y-m-d' );
-				$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
-				$params = array_merge( $ids, array( $today ) );
-				$late_ids = $wpdb->get_col(
-					$wpdb->prepare(
-						"SELECT DISTINCT s.customer_id
-						 FROM {$sales_table} s
-						 INNER JOIN {$inst_table} i ON i.sale_id = s.id
-						 LEFT JOIN (
-						 	SELECT installment_id, SUM(amount) AS paid_total
-						 	FROM {$pay_table}
-						 	GROUP BY installment_id
-						 ) p ON p.installment_id = i.id
-						 WHERE s.customer_id IN ({$placeholders})
-						   AND COALESCE(i.amount, 0) - COALESCE(p.paid_total, 0) > 0
-						   AND i.due_date IS NOT NULL
-						   AND i.due_date < %s",
-						$params
-					)
-				);
-				if ( $late_ids ) {
-					$late_lookup = array_fill_keys( array_map( 'intval', $late_ids ), true );
-				}
-			}
-			foreach ( $rows as &$row ) {
-				$row['late_unpaid'] = ! empty( $late_lookup[ (int) $row['id'] ] ) ? 1 : 0;
-			}
-			unset( $row );
+			$rows = $this->enrich_customers_with_late_flags( $rows );
 		}
 
 		if ( $rows ) {
@@ -1405,6 +1582,45 @@ class Pusula_Lite_API {
 		$row['debt_total'] = isset( $with_debt[0]['debt_total'] ) ? $with_debt[0]['debt_total'] : 0.0;
 
 		return rest_ensure_response( $row );
+	}
+
+	public function get_offline_snapshot( WP_REST_Request $request ) {
+		global $wpdb;
+		$customers_table = $this->get_table( 'customers' );
+		$customers       = $wpdb->get_results(
+			"SELECT * FROM {$customers_table} ORDER BY registration_date DESC, id DESC",
+			ARRAY_A
+		);
+
+		if ( $customers ) {
+			$customer_ids = wp_list_pluck( $customers, 'id' );
+			$contacts     = $this->get_contacts_for_customers( $customer_ids );
+			foreach ( $customers as &$customer ) {
+				$customer['contacts'] = isset( $contacts[ $customer['id'] ] ) ? $contacts[ $customer['id'] ] : array();
+			}
+			unset( $customer );
+			$customers = $this->enrich_customers_with_late_flags( $customers );
+			$customers = $this->enrich_customers_with_debt_totals( $customers );
+		}
+
+		$sales_request = new WP_REST_Request( 'GET', '/pusula/v1/sales' );
+		$sales_request->set_param( 'with', 'installments' );
+		$sales_response = $this->get_sales( $sales_request );
+		if ( is_wp_error( $sales_response ) ) {
+			return $sales_response;
+		}
+		$sales = rest_ensure_response( $sales_response )->get_data();
+
+		return rest_ensure_response(
+			array(
+				'version'           => self::VERSION,
+				'synced_at'         => wp_date( DATE_ATOM ),
+				'business'          => self::get_business_profile(),
+				'customers'         => $customers,
+				'sales'             => $sales,
+				'expected_payments' => $this->get_expected_payment_rows(),
+			)
+		);
 	}
 
 	public function create_customer( WP_REST_Request $request ) {
@@ -1682,69 +1898,9 @@ class Pusula_Lite_API {
 	}
 
 	public function get_expected_payments( WP_REST_Request $request ) {
-		global $wpdb;
-		$sales_table = $this->get_table( 'sales' );
-		$inst_table  = $this->get_table( 'installments' );
-		$cust_table  = $this->get_table( 'customers' );
-
 		$start = $request->get_param( 'start' );
 		$end   = $request->get_param( 'end' );
-
-		$today         = current_time( 'Y-m-d' );
-		$has_paid_date = $this->ensure_installments_paid_date_column();
-		$where         = array( 'i.due_date IS NOT NULL' );
-		$params        = array();
-		$paid_date_select = $has_paid_date ? 'i.paid_date' : 'NULL AS paid_date';
-
-		if ( $start ) {
-			$where[]  = 'i.due_date >= %s';
-			$params[] = sanitize_text_field( $start );
-		}
-		if ( $end ) {
-			$where[]  = 'i.due_date <= %s';
-			$params[] = sanitize_text_field( $end );
-		}
-
-		$sql = "SELECT
-				i.id AS installment_id,
-				i.due_date,
-				i.amount,
-				i.paid,
-				{$paid_date_select},
-				s.id AS sale_id,
-				s.date AS sale_date,
-				s.total AS sale_total,
-				s.description AS sale_description,
-				c.id AS customer_id,
-				c.name AS customer_name,
-				c.phone AS customer_phone,
-				c.address AS customer_address,
-				c.work_address AS customer_work_address
-			FROM {$inst_table} i
-			INNER JOIN {$sales_table} s ON s.id = i.sale_id
-			INNER JOIN {$cust_table} c ON c.id = s.customer_id
-			WHERE " . implode( ' AND ', $where ) . '
-			ORDER BY i.due_date ASC, i.id ASC';
-
-		if ( $params ) {
-			$sql = $wpdb->prepare( $sql, $params );
-		}
-
-		$rows = $wpdb->get_results( $sql, ARRAY_A );
-		$rows = $this->enrich_installments_with_payment_data( $rows, 'installment_id', false );
-
-		$filtered = array();
-		foreach ( $rows as $row ) {
-			$remaining    = $this->to_money_float( isset( $row['remaining_amount'] ) ? $row['remaining_amount'] : 0 );
-			$paid_date    = isset( $row['paid_date'] ) ? (string) $row['paid_date'] : '';
-			$is_paid_today = $remaining <= 0.00001 && $paid_date === $today;
-			if ( $remaining > 0.00001 || $is_paid_today ) {
-				$row['installment_amount'] = $this->to_money_float( isset( $row['amount'] ) ? $row['amount'] : 0 );
-				$filtered[] = $row;
-			}
-		}
-
-		return rest_ensure_response( $filtered );
+		return rest_ensure_response( $this->get_expected_payment_rows( $start, $end ) );
 	}
 
 	public function get_sale( WP_REST_Request $request ) {

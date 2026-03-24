@@ -8,6 +8,8 @@
     isSavingSale: false,
     autoRefreshHandle: null,
     autoRefreshMs: 15000,
+    snapshotSyncHandle: null,
+    snapshotSyncMs: 300000,
     selected: null,
     pendingCustomerId: null,
     currentSaleExplicit: false,
@@ -19,23 +21,60 @@
     currentInstallmentPayment: null,
     pendingInstallmentId: null,
     pendingPaymentId: null,
+    offlineSnapshot: null,
+    offlineLastSyncedAt: '',
+    hasOfflineSnapshot: false,
+    isOfflineMode: false,
+    isSyncingOfflineSnapshot: false,
   };
 
   const apiBase = (window.PusulaApp && PusulaApp.apiBase) || '';
   const wpNonce = (window.PusulaApp && PusulaApp.nonce) || '';
+  const offlineConfig = (window.PusulaApp && PusulaApp.offline && typeof PusulaApp.offline === 'object')
+    ? PusulaApp.offline
+    : {};
+  const offlineEnabled = false !== offlineConfig.enabled;
+  const offlineServiceWorkerUrl = String(offlineConfig.swUrl || '').trim();
+  const offlineAssetUrls = Array.isArray(offlineConfig.assetUrls) ? offlineConfig.assetUrls.filter(Boolean) : [];
+  const offlineDbName = 'pusula-lite-offline';
+  const offlineStoreName = 'kv';
+  const offlineSnapshotKey = 'snapshot';
 
   function getBusinessProfile() {
-    const raw = (window.PusulaApp && PusulaApp.business && typeof PusulaApp.business === 'object')
-      ? PusulaApp.business
-      : {};
+    const raw = (state.offlineSnapshot && state.offlineSnapshot.business && typeof state.offlineSnapshot.business === 'object')
+      ? state.offlineSnapshot.business
+      : ((window.PusulaApp && PusulaApp.business && typeof PusulaApp.business === 'object')
+        ? PusulaApp.business
+        : {});
 
     return {
       name: String(raw.name || '').trim(),
       address: String(raw.address || '').trim(),
       phone: String(raw.phone || '').trim(),
       website: String(raw.website || '').trim(),
-      footerSub: String(raw.footerSub || '').trim(),
+      footerSub: String(raw.footerSub || raw.footer_sub || '').trim(),
     };
+  }
+
+  function cloneData(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function normalizeUrl(url) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      parsed.hash = '';
+      return parsed.toString();
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function formatSyncDate(value) {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return String(value);
+    return parsed.toLocaleString('tr-TR');
   }
 
   function buildBusinessContactLine(company) {
@@ -118,6 +157,395 @@
     if (!Array.isArray(insts) || !insts.length) return false;
     return insts.some((inst) => installmentRemainingAmount(inst) > 0);
   };
+
+  function openOfflineDb() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error('Tarayıcı çevrimdışı veriyi desteklemiyor.'));
+        return;
+      }
+
+      const request = window.indexedDB.open(offlineDbName, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(offlineStoreName)) {
+          db.createObjectStore(offlineStoreName, { keyPath: 'key' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Çevrimdışı veritabanı açılamadı.'));
+    });
+  }
+
+  function offlineStoreGet(key) {
+    return openOfflineDb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(offlineStoreName, 'readonly');
+      const request = tx.objectStore(offlineStoreName).get(key);
+      request.onsuccess = () => resolve(request.result ? request.result.value : null);
+      request.onerror = () => reject(request.error || new Error('Çevrimdışı kayıt okunamadı.'));
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => reject(tx.error || new Error('Çevrimdışı okuma tamamlanamadı.'));
+    }));
+  }
+
+  function offlineStoreSet(key, value) {
+    return openOfflineDb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(offlineStoreName, 'readwrite');
+      tx.objectStore(offlineStoreName).put({ key, value });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error || new Error('Çevrimdışı kayıt yazılamadı.'));
+    }));
+  }
+
+  function offlineStoreDelete(key) {
+    return openOfflineDb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(offlineStoreName, 'readwrite');
+      tx.objectStore(offlineStoreName).delete(key);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error || new Error('Çevrimdışı kayıt silinemedi.'));
+    }));
+  }
+
+  function applyOfflineSnapshot(snapshot) {
+    const next = snapshot && typeof snapshot === 'object' ? cloneData(snapshot) : null;
+    state.offlineSnapshot = next;
+    state.hasOfflineSnapshot = Boolean(next && Array.isArray(next.customers));
+    state.offlineLastSyncedAt = next && next.synced_at ? String(next.synced_at) : '';
+  }
+
+  async function loadOfflineSnapshotFromStorage() {
+    if (!offlineEnabled) return null;
+    try {
+      const snapshot = await offlineStoreGet(offlineSnapshotKey);
+      applyOfflineSnapshot(snapshot);
+      return state.offlineSnapshot;
+    } catch (error) {
+      applyOfflineSnapshot(null);
+      return null;
+    }
+  }
+
+  async function saveOfflineSnapshot(snapshot) {
+    if (!offlineEnabled || !snapshot || typeof snapshot !== 'object') return;
+    await offlineStoreSet(offlineSnapshotKey, snapshot);
+    applyOfflineSnapshot(snapshot);
+  }
+
+  async function clearOfflineSnapshotStorage() {
+    state.offlineSnapshot = null;
+    state.offlineLastSyncedAt = '';
+    state.hasOfflineSnapshot = false;
+    try {
+      await offlineStoreDelete(offlineSnapshotKey);
+    } catch (error) {
+      // ignore cleanup failures
+    }
+  }
+
+  async function registerOfflineShell() {
+    if (!offlineEnabled || !offlineServiceWorkerUrl || !('serviceWorker' in navigator)) {
+      return;
+    }
+
+    const payload = {
+      type: 'CONFIGURE_OFFLINE',
+      shellUrl: normalizeUrl(window.location.href),
+      assetUrls: offlineAssetUrls.map((url) => normalizeUrl(url)).filter(Boolean),
+    };
+
+    try {
+      const registration = await navigator.serviceWorker.register(offlineServiceWorkerUrl, { scope: '/' });
+      const activeWorker = registration.active || registration.waiting || registration.installing;
+      if (activeWorker) {
+        activeWorker.postMessage(payload);
+      }
+      const ready = await navigator.serviceWorker.ready;
+      const readyWorker = ready.active || navigator.serviceWorker.controller;
+      if (readyWorker) {
+        readyWorker.postMessage(payload);
+      }
+    } catch (error) {
+      // Best effort only.
+    }
+  }
+
+  function getOfflineSnapshot() {
+    return state.offlineSnapshot && typeof state.offlineSnapshot === 'object' ? state.offlineSnapshot : null;
+  }
+
+  function ensureWriteAllowed() {
+    if (!state.isOfflineMode) return true;
+    setStatus('Çevrimdışı modda veriler salt okunur gösterilir.', true);
+    return false;
+  }
+
+  function updateOfflineBanner() {
+    const banner = document.getElementById('pusula-offline-banner');
+    if (!banner) return;
+
+    if (!state.isOfflineMode) {
+      banner.hidden = true;
+      banner.textContent = '';
+      return;
+    }
+
+    const suffix = state.offlineLastSyncedAt
+      ? ` Son eşitleme: ${formatSyncDate(state.offlineLastSyncedAt)}.`
+      : '';
+
+    banner.hidden = false;
+    banner.textContent = state.hasOfflineSnapshot
+      ? `Çevrimdışı mod etkin. Veriler salt okunur gösteriliyor.${suffix}`
+      : 'Çevrimdışı mod etkin, ancak tarayıcıda kayıtlı veri bulunamadı.';
+  }
+
+  function updateReadOnlyUi() {
+    const app = document.getElementById('pusula-lite-app');
+    if (app) {
+      app.classList.toggle('read-only', state.isOfflineMode);
+    }
+
+    const addTab = document.querySelector('.pusula-tabs button[data-tab="add"]');
+    const saleTab = document.querySelector('.pusula-tabs button[data-tab="sale"]');
+    if (addTab) addTab.disabled = state.isOfflineMode;
+    if (saleTab) saleTab.disabled = state.isOfflineMode;
+
+    const forceDisabledIds = [
+      'cust-save',
+      'cust-clear',
+      'sale-save',
+      'sale-clear',
+      'nav-edit',
+      'nav-sale',
+      'nav-delete',
+      'btn-edit-sale',
+      'btn-delete-sale',
+      'btn-add-payment',
+      'btn-mark-paid',
+      'btn-mark-unpaid',
+      'exp-mark-paid',
+      'exp-mark-unpaid',
+    ];
+    forceDisabledIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = state.isOfflineMode;
+    });
+
+    document.querySelectorAll('#pusula-tab-add input, #pusula-tab-add textarea').forEach((el) => {
+      el.disabled = state.isOfflineMode;
+    });
+    document.querySelectorAll('#pusula-tab-sale input, #pusula-tab-sale textarea').forEach((el) => {
+      el.disabled = state.isOfflineMode;
+    });
+
+    const instPayInput = document.getElementById('inst-pay-amount');
+    const expPayInput = document.getElementById('exp-pay-amount');
+    if (instPayInput) instPayInput.disabled = state.isOfflineMode;
+    if (expPayInput) expPayInput.disabled = state.isOfflineMode;
+
+    if (state.isOfflineMode && ['add', 'sale'].includes(getActiveTabName())) {
+      activateTab('search');
+    }
+
+    updateOfflineBanner();
+  }
+
+  function stopAutoRefresh() {
+    if (state.autoRefreshHandle) {
+      clearInterval(state.autoRefreshHandle);
+      state.autoRefreshHandle = null;
+    }
+  }
+
+  function setOfflineMode(isOffline) {
+    const nextValue = Boolean(isOffline);
+    const changed = state.isOfflineMode !== nextValue;
+    state.isOfflineMode = nextValue;
+    if (changed) {
+      if (state.isOfflineMode) {
+        stopAutoRefresh();
+      } else {
+        startAutoRefresh();
+      }
+    }
+    updateReadOnlyUi();
+  }
+
+  function extractSnapshotArray(key) {
+    const snapshot = getOfflineSnapshot();
+    if (!snapshot || !Array.isArray(snapshot[key])) return [];
+    return cloneData(snapshot[key]);
+  }
+
+  function filterOfflineCustomers(searchParams) {
+    const rows = extractSnapshotArray('customers');
+    const limit = Math.max(1, Math.min(5000, Number(searchParams.get('limit') || 100)));
+    const offset = Math.max(0, Number(searchParams.get('offset') || 0));
+    const search = String(searchParams.get('search') || '').trim().toLowerCase();
+    const id = String(searchParams.get('id') || '').trim();
+    const name = String(searchParams.get('name') || '').trim().toLowerCase();
+    const phone = String(searchParams.get('phone') || '').trim().toLowerCase();
+    const address = String(searchParams.get('address') || '').trim().toLowerCase();
+
+    const filtered = rows.filter((row) => {
+      if (id && String(row.id || '') !== id && !String(row.id || '').includes(id)) return false;
+      if (search) {
+        const haystack = [row.name, row.phone, row.address, row.work_address].join(' ').toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      if (name && !String(row.name || '').toLowerCase().includes(name)) return false;
+      if (phone && !String(row.phone || '').toLowerCase().includes(phone)) return false;
+      if (address) {
+        const home = String(row.address || '').toLowerCase();
+        const work = String(row.work_address || '').toLowerCase();
+        if (!home.includes(address) && !work.includes(address)) return false;
+      }
+      return true;
+    });
+
+    return filtered.slice(offset, offset + limit);
+  }
+
+  function filterOfflineSales(searchParams) {
+    const rows = extractSnapshotArray('sales');
+    const customerId = String(searchParams.get('customer_id') || '').trim();
+    const start = String(searchParams.get('start') || '').trim();
+    const end = String(searchParams.get('end') || '').trim();
+    const withInstallments = String(searchParams.get('with') || '').includes('installments');
+
+    return rows
+      .filter((row) => {
+        if (customerId && String(row.customer_id || '') !== customerId) return false;
+        if (start && String(row.date || '') < start) return false;
+        if (end && String(row.date || '') > end) return false;
+        return true;
+      })
+      .map((row) => {
+        if (withInstallments) return row;
+        const next = { ...row };
+        delete next.installments;
+        delete next.installments_total;
+        delete next.installments_paid_total;
+        delete next.installments_remaining_total;
+        return next;
+      });
+  }
+
+  function filterOfflineExpectedPayments(searchParams) {
+    const rows = extractSnapshotArray('expected_payments');
+    const start = String(searchParams.get('start') || '').trim();
+    const end = String(searchParams.get('end') || '').trim();
+    return rows.filter((row) => {
+      if (start && String(row.due_date || '') < start) return false;
+      if (end && String(row.due_date || '') > end) return false;
+      return true;
+    });
+  }
+
+  async function offlineApi(path) {
+    const snapshot = getOfflineSnapshot() || await loadOfflineSnapshotFromStorage();
+    if (!snapshot) {
+      throw new Error('Çevrimdışı kullanım için önceden eşitlenmiş veri bulunamadı.');
+    }
+
+    const url = new URL(path, 'https://pusula.local');
+    const pathname = url.pathname.replace(/\/+$/, '') || '/';
+
+    if (pathname === '/customers') {
+      return filterOfflineCustomers(url.searchParams);
+    }
+
+    if (pathname === '/sales') {
+      return filterOfflineSales(url.searchParams);
+    }
+
+    if (pathname === '/expected-payments') {
+      return filterOfflineExpectedPayments(url.searchParams);
+    }
+
+    const customerMatch = pathname.match(/^\/customers\/(\d+)$/);
+    if (customerMatch) {
+      const customerId = String(customerMatch[1]);
+      const row = extractSnapshotArray('customers').find((customer) => String(customer.id || '') === customerId);
+      if (!row) throw new Error('Müşteri bulunamadı.');
+      return row;
+    }
+
+    const paymentsMatch = pathname.match(/^\/installments\/(\d+)\/payments$/);
+    if (paymentsMatch) {
+      const installmentId = String(paymentsMatch[1]);
+      const sales = extractSnapshotArray('sales');
+      for (let i = 0; i < sales.length; i += 1) {
+        const sale = sales[i];
+        const installment = Array.isArray(sale.installments)
+          ? sale.installments.find((row) => String(row.id || row.installment_id || '') === installmentId)
+          : null;
+        if (installment) {
+          return {
+            installment,
+            payments: Array.isArray(installment.payments) ? installment.payments : [],
+          };
+        }
+      }
+      throw new Error('Taksit bulunamadı.');
+    }
+
+    throw new Error('Bu veri çevrimdışı kullanılamıyor.');
+  }
+
+  async function syncOfflineSnapshot({ silent = true } = {}) {
+    if (!offlineEnabled || state.isSyncingOfflineSnapshot || !navigator.onLine) {
+      return false;
+    }
+
+    state.isSyncingOfflineSnapshot = true;
+    try {
+      const snapshot = await api('/offline-snapshot', { allowOfflineFallback: false });
+      await saveOfflineSnapshot(snapshot);
+      await registerOfflineShell();
+      if (!silent && state.offlineLastSyncedAt) {
+        setStatus(`Çevrimdışı kopya güncellendi. (${formatSyncDate(state.offlineLastSyncedAt)})`);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      state.isSyncingOfflineSnapshot = false;
+      updateOfflineBanner();
+    }
+  }
+
+  function startOfflineSnapshotSync() {
+    if (state.snapshotSyncHandle) clearInterval(state.snapshotSyncHandle);
+    state.snapshotSyncHandle = setInterval(() => {
+      if (!state.isOfflineMode && navigator.onLine) {
+        syncOfflineSnapshot({ silent: true });
+      }
+    }, state.snapshotSyncMs);
+  }
+
+  function scheduleOfflineSnapshotSync() {
+    if (!state.isOfflineMode && navigator.onLine) {
+      syncOfflineSnapshot({ silent: true });
+    }
+  }
+
+  async function handleConnectionRestore() {
+    const synced = await syncOfflineSnapshot({ silent: true });
+    if (!synced) return;
+    setOfflineMode(false);
+    autoRefreshTick();
+  }
+
+  function handleConnectionLoss() {
+    setOfflineMode(true);
+  }
 
   function ensureLayoutFits() {
     const app = document.getElementById('pusula-lite-app');
@@ -215,7 +643,9 @@
 
   async function api(path, opts = {}) {
     if (!apiBase) throw new Error('API ayarları eksik.');
-    const res = await fetch(`${apiBase}${path}`, {
+    const method = String(opts.method || 'GET').toUpperCase();
+    const allowOfflineFallback = false !== opts.allowOfflineFallback;
+    const requestOptions = {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
@@ -223,7 +653,19 @@
         ...(opts.headers || {}),
       },
       credentials: 'same-origin',
-    });
+    };
+
+    let res;
+    try {
+      res = await fetch(`${apiBase}${path}`, requestOptions);
+    } catch (networkError) {
+      if (allowOfflineFallback && method === 'GET') {
+        const offlineResponse = await offlineApi(path);
+        setOfflineMode(true);
+        return offlineResponse;
+      }
+      throw networkError;
+    }
     if (!res.ok) {
       const text = await res.text();
       let msg = text;
@@ -231,6 +673,9 @@
         msg = JSON.parse(text).message || msg;
       } catch (e) { /* ignore */ }
       throw new Error(msg || 'İstek başarısız.');
+    }
+    if (method === 'GET') {
+      setOfflineMode(false);
     }
     if (res.status === 204) return null;
     return res.json();
@@ -324,6 +769,7 @@
   }
 
   async function autoRefreshTick() {
+    if (state.isOfflineMode) return;
     if (document.hidden) return;
     if (state.isSavingCustomer || state.isSavingSale || state.isLoadingCustomers) return;
     if (document.querySelector('.pusula-modal-backdrop')) return;
@@ -351,6 +797,7 @@
   }
 
   function startAutoRefresh() {
+    if (state.isOfflineMode) return;
     if (state.autoRefreshHandle) clearInterval(state.autoRefreshHandle);
     state.autoRefreshHandle = setInterval(autoRefreshTick, state.autoRefreshMs);
   }
@@ -459,6 +906,7 @@
 
     if (saveBtn) {
       saveBtn.addEventListener('click', async () => {
+        if (!ensureWriteAllowed()) return;
         if (!onSave) return close();
         const nextVal = textarea ? textarea.value : '';
         if (deleteBtn) deleteBtn.disabled = true;
@@ -481,6 +929,7 @@
 
     if (deleteBtn) {
       deleteBtn.addEventListener('click', async () => {
+        if (!ensureWriteAllowed()) return;
         if (!onDelete) return close();
         deleteBtn.disabled = true;
         if (saveBtn) saveBtn.disabled = true;
@@ -512,6 +961,7 @@
   }
 
   function openSaleDescriptionEditor(sale, { customer, onUpdated } = {}) {
+    if (!ensureWriteAllowed()) return;
     if (!sale || !sale.id) return;
     const custId = customer && customer.id ? customer.id : sale.customer_id;
     const custName = customer && customer.name ? customer.name : sale.customer_name;
@@ -601,6 +1051,7 @@
       }
     });
     document.getElementById('nav-delete').addEventListener('click', deleteCustomer);
+    updateReadOnlyUi();
   }
 
   function renderTable(rows) {
@@ -655,6 +1106,7 @@
     if (!list.length || !hasSelection) {
       enableNav(false);
     }
+    updateReadOnlyUi();
   }
 
   async function loadCustomers({ silent = false, showLoading = true } = {}) {
@@ -663,7 +1115,7 @@
     state.isLoadingCustomers = true;
     if (showLoading) setCustomersLoading(true);
     try {
-      const query = new URLSearchParams({ limit: 500, with: 'late_unpaid' });
+      const query = new URLSearchParams({ limit: 5000, with: 'late_unpaid' });
       ['id','name','phone','address'].forEach((f) => {
         if (fields[f]) query.append(f, fields[f]);
       });
@@ -713,9 +1165,11 @@
       const btn = document.getElementById(id);
       if (btn) btn.disabled = !enabled;
     });
+    updateReadOnlyUi();
   }
 
   async function deleteCustomer() {
+    if (!ensureWriteAllowed()) return;
     if (!state.selected) return;
     if (!window.confirm('Bu müşteriyi silmek istediğinize emin misiniz?')) return;
     if (!window.confirm('Dikkat: Bu işlem geri alınamaz. Müşteriye ait tüm satış ve taksit kayıtları silinecek. Devam etmek istiyor musunuz?')) return;
@@ -728,6 +1182,7 @@
       fillCustomerForm();
       enableNav(false);
       await loadCustomers();
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     }
@@ -830,6 +1285,7 @@
       custIdInput.addEventListener('blur', syncPending);
     }
     fillCustomerForm();
+    updateReadOnlyUi();
   }
 
   function collectContacts() {
@@ -935,6 +1391,7 @@
   }
 
   async function refreshNewCustomerIdFromServer(expectedId) {
+    if (state.isOfflineMode) return;
     const idEl = document.getElementById('cust-id');
     if (!idEl) return;
     const before = idEl.value.trim();
@@ -954,6 +1411,7 @@
   }
 
   async function saveCustomer() {
+    if (!ensureWriteAllowed()) return;
     const addRoot = document.getElementById('pusula-tab-add');
     const saveBtn = document.getElementById('cust-save');
     const clearBtn = document.getElementById('cust-clear');
@@ -1029,6 +1487,7 @@
       resetSaleForm();
       fillSaleCustomer(newCust);
       activateTab('sale');
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -1146,6 +1605,7 @@
     }
     updateSalePreview();
     syncSaleCustomerFromPending();
+    updateReadOnlyUi();
     setTimeout(ensureLayoutFits, 0);
   }
 
@@ -1158,6 +1618,7 @@
   }
 
   async function saveSale() {
+    if (!ensureWriteAllowed()) return;
     const custId = document.getElementById('sale-cust-id').value.trim();
     if (!custId) {
       setStatus('Müşteri seçiniz.', true);
@@ -1274,6 +1735,7 @@
       if (window.confirm('Satış makbuzu yazdırılsın mı?')) {
         printReceiptDetailed(saleData, state.selected || { id: custId });
       }
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -1429,6 +1891,7 @@
     if (unpaidBtn) unpaidBtn.addEventListener('click', () => toggleInstallmentPaid(false));
     const instPrintBtn = document.getElementById('btn-print-inst');
     if (instPrintBtn) instPrintBtn.addEventListener('click', printSelectedInstallmentReceipt);
+    updateReadOnlyUi();
     setTimeout(ensureLayoutFits, 0);
   }
 
@@ -1567,6 +2030,7 @@
     } else if (!rows.length) {
       renderInstallments([]);
     }
+    updateReadOnlyUi();
   }
 
   function renderInstallments(insts) {
@@ -1652,6 +2116,7 @@
 
     state.pendingInstallmentId = null;
     state.pendingPaymentId = null;
+    updateReadOnlyUi();
   }
 
   function renderInstallmentPayments(payments, installment = null) {
@@ -1693,6 +2158,7 @@
       tr.innerHTML = '<td colspan="3" class="pusula-empty-cell">Tahsilat kaydı yok.</td>';
       tbody.appendChild(tr);
       if (printBtn) printBtn.disabled = true;
+      updateReadOnlyUi();
       return;
     }
 
@@ -1712,9 +2178,11 @@
       const hasPayments = selectedInstallment && Array.isArray(selectedInstallment.payments) && selectedInstallment.payments.length > 0;
       printBtn.disabled = !hasPayments;
     }
+    updateReadOnlyUi();
   }
 
   async function toggleInstallmentPaid(paid) {
+    if (!ensureWriteAllowed()) return;
     const inst = state.currentInstallment;
     if (!inst || !inst.id) return;
     const instId = inst.id;
@@ -1734,6 +2202,7 @@
       state.pendingInstallmentId = instId;
       state.pendingPaymentId = null;
       if (state.selected) await loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -1742,6 +2211,7 @@
   }
 
   async function takeInstallmentPayment(useRemainingAmount = false) {
+    if (!ensureWriteAllowed()) return;
     const inst = state.currentInstallment;
     if (!inst || !inst.id) return;
     const remaining = installmentRemainingAmount(inst);
@@ -1776,6 +2246,7 @@
       }
 
       if (state.selected) await loadSales(state.selected.id, state.currentSale ? state.currentSale.id : null);
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -2119,6 +2590,7 @@
   }
 
   async function deleteSale(sale) {
+    if (!ensureWriteAllowed()) return false;
     const s = sale && sale.id ? sale : null;
     if (!s) return false;
     if (!window.confirm('Bu satışı silmek istediğinize emin misiniz?')) return false;
@@ -2130,6 +2602,7 @@
       const keepSelectedId = state.currentSale && String(state.currentSale.id) !== String(s.id) ? state.currentSale.id : null;
       state.sales = (state.sales || []).filter((row) => String(row.id) !== String(s.id));
       renderSalesTable(state.sales || [], { selectedSaleId: keepSelectedId });
+      scheduleOfflineSnapshotSync();
       return true;
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
@@ -2540,6 +3013,7 @@
       });
     });
     updateExpectedHideLateState();
+    updateReadOnlyUi();
     setTimeout(ensureLayoutFits, 0);
   }
 
@@ -2665,6 +3139,7 @@
       tr.innerHTML = '<td colspan="12" class="pusula-empty-cell">Beklenen ödeme bulunamadı.</td>';
       tbody.appendChild(tr);
     }
+    updateReadOnlyUi();
   }
 
   function openExpectedCustomerDetail(row) {
@@ -2714,6 +3189,7 @@
   }
 
   async function markExpectedPaymentPaid() {
+    if (!ensureWriteAllowed()) return;
     if (!state.currentExpected || !state.currentExpected.installment_id) return;
     const target = state.currentExpected;
     const instId = target.installment_id;
@@ -2761,6 +3237,7 @@
           await printExpectedPaymentReceipt(updatedRow);
         }
       }
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -2769,6 +3246,7 @@
   }
 
   async function markExpectedPaymentUnpaid() {
+    if (!ensureWriteAllowed()) return;
     if (!state.currentExpected || !state.currentExpected.installment_id) return;
     const target = state.currentExpected;
     const instId = target.installment_id;
@@ -2787,6 +3265,7 @@
       if (state.selected && String(state.selected.id || '') === String(target.customer_id || '')) {
         await loadSales(target.customer_id, target.sale_id || null);
       }
+      scheduleOfflineSnapshotSync();
     } catch (err) {
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
@@ -2830,7 +3309,9 @@
   }
 
   // ------------------- Init -------------------
-  function init() {
+  async function init() {
+    await loadOfflineSnapshotFromStorage();
+    await registerOfflineShell();
     renderTabs();
     renderSearchTab();
     renderAddTab();
@@ -2838,15 +3319,30 @@
     renderDetailTab();
     renderReportTab();
     renderExpectedTab();
-    loadCustomers();
+    if (!navigator.onLine) {
+      setOfflineMode(true);
+    } else {
+      updateReadOnlyUi();
+    }
+    await loadCustomers();
     startAutoRefresh();
+    startOfflineSnapshotSync();
+    if (navigator.onLine) {
+      syncOfflineSnapshot({ silent: true });
+    }
     window.addEventListener('resize', () => setTimeout(ensureLayoutFits, 0));
     window.addEventListener('focus', () => autoRefreshTick());
+    window.addEventListener('online', handleConnectionRestore);
+    window.addEventListener('offline', handleConnectionLoss);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) autoRefreshTick();
     });
     setTimeout(ensureLayoutFits, 0);
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => {
+    init().catch(() => {
+      // Ignore bootstrap errors; the app will show request failures in-place.
+    });
+  });
 })();

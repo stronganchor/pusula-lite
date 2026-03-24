@@ -111,6 +111,20 @@ html, body {
   margin: 0;
   color: #e6ecf3;
 }
+.pusula-offline-banner {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 180, 84, 0.12);
+  border: 1px solid rgba(255, 180, 84, 0.35);
+  color: #ffcf86;
+  font-size: 13px;
+}
+.pusula-app.read-only .pusula-tab-content {
+  border-color: #5a5140;
+}
+.pusula-app.read-only .pusula-status {
+  color: #ffcf86;
+}
 .pusula-title-tabs {
   display: flex;
   align-items: center;
