@@ -143,27 +143,43 @@ async function handleLogout(request) {
   }
 }
 
+async function getCachedShellResponse(cache, shellUrl, requestUrl) {
+  if (shellUrl) {
+    const cachedShell = await cache.match(shellUrl);
+    if (cachedShell) {
+      return cachedShell;
+    }
+  }
+
+  const fallback = await cache.match(requestUrl);
+  if (fallback) {
+    return fallback;
+  }
+
+  return null;
+}
+
 async function handleShellNavigation(request, config) {
   const shellUrl = normalizeUrl(config && config.shellUrl);
+  const requestUrl = normalizeUrl(request.url);
   const cache = await caches.open(PUSULA_SHELL_CACHE);
 
   try {
     const response = await fetch(request);
+    if (!response || response.status >= 500) {
+      const cached = await getCachedShellResponse(cache, shellUrl, requestUrl);
+      if (cached) {
+        return cached;
+      }
+    }
     if (response && response.ok && shellUrl) {
       await cache.put(shellUrl, response.clone());
     }
     return response;
   } catch (error) {
-    if (shellUrl) {
-      const cached = await cache.match(shellUrl);
-      if (cached) {
-        return cached;
-      }
-    }
-
-    const fallback = await cache.match(normalizeUrl(request.url));
-    if (fallback) {
-      return fallback;
+    const cached = await getCachedShellResponse(cache, shellUrl, requestUrl);
+    if (cached) {
+      return cached;
     }
 
     return new Response(

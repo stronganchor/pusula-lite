@@ -627,9 +627,11 @@
 
   const trErrorMessage = (msg) => {
     if (!msg) return 'Bilinmeyen hata.';
-    if (msg.toLowerCase().includes('customer not found')) return 'Müşteri bulunamadı.';
-    if (msg.toLowerCase().includes('not found')) return 'Kayıt bulunamadı.';
-    if (msg.toLowerCase().includes('forbidden') || msg.toLowerCase().includes('unauthorized')) return 'Yetki hatası. Lütfen oturum açın.';
+    const normalized = String(msg).toLowerCase();
+    if (normalized.includes('<!doctype') || normalized.includes('<html')) return 'Sunucuya ulaşılamadı.';
+    if (normalized.includes('customer not found')) return 'Müşteri bulunamadı.';
+    if (normalized.includes('not found')) return 'Kayıt bulunamadı.';
+    if (normalized.includes('forbidden') || normalized.includes('unauthorized')) return 'Yetki hatası. Lütfen oturum açın.';
     return msg;
   };
 
@@ -639,6 +641,12 @@
       el.textContent = msg || '';
       el.style.color = isError ? '#f0a7a7' : '#88b7c9';
     }
+  }
+
+  function shouldFallbackToOfflineFromResponse(response) {
+    if (!response) return true;
+    const status = Number(response.status || 0);
+    return status >= 500;
   }
 
   async function api(path, opts = {}) {
@@ -660,13 +668,26 @@
       res = await fetch(`${apiBase}${path}`, requestOptions);
     } catch (networkError) {
       if (allowOfflineFallback && method === 'GET') {
-        const offlineResponse = await offlineApi(path);
-        setOfflineMode(true);
-        return offlineResponse;
+        try {
+          const offlineResponse = await offlineApi(path);
+          setOfflineMode(true);
+          return offlineResponse;
+        } catch (offlineError) {
+          throw networkError;
+        }
       }
       throw networkError;
     }
     if (!res.ok) {
+      if (allowOfflineFallback && method === 'GET' && shouldFallbackToOfflineFromResponse(res)) {
+        try {
+          const offlineResponse = await offlineApi(path);
+          setOfflineMode(true);
+          return offlineResponse;
+        } catch (offlineError) {
+          // Fall back to the original server error if there is no cached snapshot.
+        }
+      }
       const text = await res.text();
       let msg = text;
       try {
