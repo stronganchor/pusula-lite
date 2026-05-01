@@ -60,6 +60,14 @@
     return value == null ? value : JSON.parse(JSON.stringify(value));
   }
 
+  function createClientRequestKey(scope) {
+    const prefix = String(scope || 'request').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'request';
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return `${prefix}-${window.crypto.randomUUID()}`;
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   function normalizeUrl(url) {
     try {
       const parsed = new URL(url, window.location.origin);
@@ -1053,8 +1061,18 @@
         debouncedRemote();
       });
     });
-    document.getElementById('nav-edit').addEventListener('click', () => {
+    document.getElementById('nav-edit').addEventListener('click', async () => {
       if (state.selected) {
+        try {
+          const full = await fetchCustomerById(state.selected.id);
+          if (full) state.selected = full;
+        } catch (err) {
+          setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
+        }
+        if (!Array.isArray(state.selected.contacts)) {
+          setStatus('Müşteri bilgileri tam yüklenemedi. Lütfen listeyi yenileyip tekrar deneyin.', true);
+          return;
+        }
         fillCustomerForm(state.selected);
         document.querySelector('button[data-tab="add"]').click();
       }
@@ -1137,7 +1155,7 @@
     state.isLoadingCustomers = true;
     if (showLoading) setCustomersLoading(true);
     try {
-      const query = new URLSearchParams({ limit: 5000, with: 'late_unpaid' });
+      const query = new URLSearchParams({ limit: 5000, with: 'late_unpaid,contacts' });
       ['id','name','phone','address'].forEach((f) => {
         if (fields[f]) query.append(f, fields[f]);
       });
@@ -1169,8 +1187,10 @@
     const id = String(customerId || '').trim();
     if (!/^\d+$/.test(id)) return null;
     const local = state.customers.find((c) => String(c.id) === id);
-    if (local) return local;
-    const rows = await api(`/customers?id=${encodeURIComponent(id)}&limit=1`);
+    if (local && Array.isArray(local.contacts)) return local;
+    const full = await api(`/customers/${encodeURIComponent(id)}`);
+    if (full && full.id) return full;
+    const rows = await api(`/customers?id=${encodeURIComponent(id)}&limit=1&with=contacts`);
     if (rows && rows[0]) return rows[0];
     return null;
   }
@@ -1434,6 +1454,7 @@
 
   async function saveCustomer() {
     if (!ensureWriteAllowed()) return;
+    if (state.isSavingCustomer) return;
     const addRoot = document.getElementById('pusula-tab-add');
     const saveBtn = document.getElementById('cust-save');
     const clearBtn = document.getElementById('cust-clear');
@@ -1641,44 +1662,60 @@
 
   async function saveSale() {
     if (!ensureWriteAllowed()) return;
-    const custId = document.getElementById('sale-cust-id').value.trim();
-    if (!custId) {
-      setStatus('Müşteri seçiniz.', true);
-      return;
-    }
-    if (!state.selected || String(state.selected.id) !== String(custId)) {
-      const cust = await fetchCustomerById(custId);
-      if (!cust) {
-        setStatus('Hata: Müşteri bulunamadı.', true);
+    if (state.isSavingSale) return;
+
+    const saleRoot = document.getElementById('pusula-tab-sale');
+    const saveBtn = document.getElementById('sale-save');
+    const clearBtn = document.getElementById('sale-clear');
+    const tabButtons = Array.from(document.querySelectorAll('.pusula-tabs button'));
+    const prevSaveHtml = saveBtn ? saveBtn.innerHTML : '';
+    state.isSavingSale = true;
+    try {
+      if (saleRoot) {
+        saleRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+          el.disabled = true;
+        });
+      }
+      tabButtons.forEach((b) => { b.disabled = true; });
+      if (saveBtn) saveBtn.innerHTML = `<span class="pusula-spinner" aria-hidden="true"></span>KAYDEDİLİYOR...`;
+      if (clearBtn) clearBtn.disabled = true;
+
+      const custId = document.getElementById('sale-cust-id').value.trim();
+      if (!custId) {
+        setStatus('Müşteri seçiniz.', true);
         return;
       }
-      state.selected = cust;
-      state.pendingCustomerId = null;
-      fillSaleCustomer(cust);
-    }
-	    const total = parseFloat(document.getElementById('sale-total').value);
-	    const downRaw = parseFloat(document.getElementById('sale-down').value || '0');
-	    const down = Number.isFinite(downRaw) ? Math.max(0, downRaw) : 0;
-	    const nInstRaw = parseInt(document.getElementById('sale-n').value || '1', 10);
-	    const dueDay = parseInt(document.getElementById('sale-due').value || '1', 10);
-	    const totalCents = Math.round(Math.max(0, total) * 100);
-	    const downCents = Math.round(Math.max(0, down) * 100);
-	    const isFullyPaid = totalCents > 0 && downCents >= totalCents;
-	    const nInst = isFullyPaid ? 0 : nInstRaw;
-	    const effectiveDown = isFullyPaid ? total : down;
-	    if (!total || total <= 0 || (!isFullyPaid && (nInst < 1 || dueDay < 1 || dueDay > 28))) {
-	      setStatus('Satış alanlarını kontrol edin.', true);
-	      return;
-	    }
-	    const saleDateISO = toISO(document.getElementById('sale-date').value || todayStr());
-	    const saleBase = parseISODate(saleDateISO);
-    if (!saleBase) {
-      setStatus('Satış tarihi geçersiz. (GG-AA-YYYY)', true);
-      return;
-    }
-    const desc = document.getElementById('sale-desc').value.trim();
-    try {
-      state.isSavingSale = true;
+      if (!state.selected || String(state.selected.id) !== String(custId)) {
+        const cust = await fetchCustomerById(custId);
+        if (!cust) {
+          setStatus('Hata: Müşteri bulunamadı.', true);
+          return;
+        }
+        state.selected = cust;
+        state.pendingCustomerId = null;
+        fillSaleCustomer(cust);
+      }
+      const total = parseFloat(document.getElementById('sale-total').value);
+      const downRaw = parseFloat(document.getElementById('sale-down').value || '0');
+      const down = Number.isFinite(downRaw) ? Math.max(0, downRaw) : 0;
+      const nInstRaw = parseInt(document.getElementById('sale-n').value || '1', 10);
+      const dueDay = parseInt(document.getElementById('sale-due').value || '1', 10);
+      const totalCents = Math.round(Math.max(0, total) * 100);
+      const downCents = Math.round(Math.max(0, down) * 100);
+      const isFullyPaid = totalCents > 0 && downCents >= totalCents;
+      const nInst = isFullyPaid ? 0 : nInstRaw;
+      const effectiveDown = isFullyPaid ? total : down;
+      if (!total || total <= 0 || (!isFullyPaid && (nInst < 1 || dueDay < 1 || dueDay > 28))) {
+        setStatus('Satış alanlarını kontrol edin.', true);
+        return;
+      }
+      const saleDateISO = toISO(document.getElementById('sale-date').value || todayStr());
+      const saleBase = parseISODate(saleDateISO);
+      if (!saleBase) {
+        setStatus('Satış tarihi geçersiz. (GG-AA-YYYY)', true);
+        return;
+      }
+      const desc = document.getElementById('sale-desc').value.trim();
       setStatus('Kaydediliyor...');
       const sale = await api('/sales', {
         method: 'POST',
@@ -1687,43 +1724,44 @@
           date: saleDateISO,
           total,
           description: desc,
+          request_key: createClientRequestKey('sale'),
         }),
-	      });
-	      const saleId = sale.id;
-	      const instCalls = [];
-	      const instList = [];
-	      const remaining = Math.max(0, total - effectiveDown);
-	      if (nInst > 0 && remaining > 0) {
-	        const instAmt = Math.round((remaining / nInst) * 100) / 100;
-	        for (let i = 1; i <= nInst; i++) {
-	          const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
-	          d.setDate(Math.min(dueDay, 28));
-	          const dueIso = formatISODate(d);
-	          const inst = {
-	            sale_id: saleId,
-	            due_date: dueIso,
-	            amount: instAmt,
-	            paid: 0,
-	          };
-	          instList.push(inst);
-	          instCalls.push(
-	            api('/installments', {
-	              method: 'POST',
-	              body: JSON.stringify({
-	                sale_id: saleId,
-	                due_date: dueIso,
-	                amount: instAmt,
-	                paid: 0,
-	              }),
-	            }).then((instRes) => {
-	              if (instRes && instRes.id) inst.id = instRes.id;
-	              return instRes;
-	            })
-	          );
-	        }
-	        await Promise.all(instCalls);
-	      }
-	      setStatus(nInst > 0 ? 'Satış ve taksitler kaydedildi.' : 'Satış kaydedildi.');
+      });
+      const saleId = sale.id;
+      const instCalls = [];
+      const instList = [];
+      const remaining = Math.max(0, total - effectiveDown);
+      if (nInst > 0 && remaining > 0) {
+        const instAmt = Math.round((remaining / nInst) * 100) / 100;
+        for (let i = 1; i <= nInst; i++) {
+          const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
+          d.setDate(Math.min(dueDay, 28));
+          const dueIso = formatISODate(d);
+          const inst = {
+            sale_id: saleId,
+            due_date: dueIso,
+            amount: instAmt,
+            paid: 0,
+          };
+          instList.push(inst);
+          instCalls.push(
+            api('/installments', {
+              method: 'POST',
+              body: JSON.stringify({
+                sale_id: saleId,
+                due_date: dueIso,
+                amount: instAmt,
+                paid: 0,
+              }),
+            }).then((instRes) => {
+              if (instRes && instRes.id) inst.id = instRes.id;
+              return instRes;
+            })
+          );
+        }
+        await Promise.all(instCalls);
+      }
+      setStatus(nInst > 0 ? 'Satış ve taksitler kaydedildi.' : 'Satış kaydedildi.');
       const newSale = {
         id: saleId,
         customer_id: Number(custId),
@@ -1746,14 +1784,14 @@
       if (state.selected) loadSales(state.selected.id, saleId);
       fillSaleCustomer(state.selected);
       updateSalePreview();
-	      const saleData = {
-	        id: saleId,
-	        date: saleDateISO,
-	        total,
-	        description: desc,
-	        down: effectiveDown,
-	        installments: instList,
-	      };
+      const saleData = {
+        id: saleId,
+        date: saleDateISO,
+        total,
+        description: desc,
+        down: effectiveDown,
+        installments: instList,
+      };
       if (window.confirm('Satış makbuzu yazdırılsın mı?')) {
         printReceiptDetailed(saleData, state.selected || { id: custId });
       }
@@ -1762,8 +1800,18 @@
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
     } finally {
       state.isSavingSale = false;
+      if (saveBtn) saveBtn.innerHTML = prevSaveHtml || 'KAYDET';
+      if (saleRoot) {
+        saleRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+          el.disabled = false;
+        });
+      }
+      const saleCustomerName = document.getElementById('sale-cust-name');
+      if (saleCustomerName) saleCustomerName.disabled = true;
+      tabButtons.forEach((b) => { b.disabled = false; });
+      updateReadOnlyUi();
+      setTimeout(ensureLayoutFits, 0);
     }
-    setTimeout(ensureLayoutFits, 0);
   }
 
   function updateSalePreview() {

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.3.2
+ * Version: 1.3.3
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,7 +58,7 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION                      = '1.3.2';
+	const VERSION                      = '1.3.3';
 	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
 	const OPTION_KEY                   = 'pusula_lite_api_key';
 	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';
@@ -70,6 +70,7 @@ class Pusula_Lite_API {
 	/** @var Pusula_Lite_API|null */
 	private static $instance = null;
 	private $installments_has_paid_date = null;
+	private $sales_has_request_key = null;
 
 	public static function init() {
 		if ( null === self::$instance ) {
@@ -131,8 +132,10 @@ class Pusula_Lite_API {
 			date DATE NOT NULL,
 			total DECIMAL(10,2) NOT NULL,
 			description TEXT,
+			request_key VARCHAR(64) DEFAULT NULL,
 			PRIMARY KEY (id),
-			KEY customer_idx (customer_id)
+			KEY customer_idx (customer_id),
+			UNIQUE KEY request_key_idx (request_key)
 		) {$charset_collate};";
 
 		$installments = "CREATE TABLE {$prefix}installments (
@@ -1032,6 +1035,32 @@ class Pusula_Lite_API {
 		return true;
 	}
 
+	private function sales_has_request_key() {
+		if ( null !== $this->sales_has_request_key ) {
+			return $this->sales_has_request_key;
+		}
+		global $wpdb;
+		$table  = $this->get_table( 'sales' );
+		$column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$table} LIKE %s", 'request_key' ) );
+		$this->sales_has_request_key = ! empty( $column );
+		return $this->sales_has_request_key;
+	}
+
+	private function ensure_sales_request_key_column() {
+		if ( $this->sales_has_request_key() ) {
+			return true;
+		}
+		global $wpdb;
+		$table = $this->get_table( 'sales' );
+		$wpdb->query( "ALTER TABLE {$table} ADD COLUMN request_key VARCHAR(64) DEFAULT NULL" );
+		$this->sales_has_request_key = null;
+		if ( ! $this->sales_has_request_key() ) {
+			return false;
+		}
+		$wpdb->query( "ALTER TABLE {$table} ADD UNIQUE KEY request_key_idx (request_key)" );
+		return true;
+	}
+
 	private function to_money_float( $value ) {
 		return round( (float) $value, 2 );
 	}
@@ -1042,6 +1071,55 @@ class Pusula_Lite_API {
 
 	private function is_valid_iso_date( $value ) {
 		return is_string( $value ) && (bool) preg_match( '/^\d{4}-\d{2}-\d{2}$/', $value );
+	}
+
+	private function sanitize_request_key( $value ) {
+		$key = sanitize_text_field( (string) $value );
+		$key = preg_replace( '/[^A-Za-z0-9_.:-]/', '', $key );
+		return substr( $key, 0, 64 );
+	}
+
+	private function normalize_contacts_payload( $contacts ) {
+		if ( empty( $contacts ) || ! is_array( $contacts ) ) {
+			return array();
+		}
+
+		$normalized = array();
+		foreach ( $contacts as $contact ) {
+			if ( is_object( $contact ) ) {
+				$contact = (array) $contact;
+			}
+			if ( ! is_array( $contact ) ) {
+				continue;
+			}
+
+			$row = array(
+				'name'         => isset( $contact['name'] ) ? sanitize_text_field( $contact['name'] ) : '',
+				'phone'        => isset( $contact['phone'] ) ? sanitize_text_field( $contact['phone'] ) : '',
+				'home_address' => isset( $contact['home_address'] ) ? sanitize_text_field( $contact['home_address'] ) : '',
+				'work_address' => isset( $contact['work_address'] ) ? sanitize_text_field( $contact['work_address'] ) : '',
+			);
+
+			if ( '' === $row['name'] && '' === $row['phone'] && '' === $row['home_address'] && '' === $row['work_address'] ) {
+				continue;
+			}
+
+			$normalized[] = $row;
+		}
+
+		return $normalized;
+	}
+
+	private function customer_data_matches( array $existing, array $data ) {
+		foreach ( array( 'name', 'phone', 'address', 'work_address', 'notes', 'registration_date' ) as $field ) {
+			$existing_value = isset( $existing[ $field ] ) ? (string) $existing[ $field ] : '';
+			$new_value      = isset( $data[ $field ] ) ? (string) $data[ $field ] : '';
+			if ( $existing_value !== $new_value ) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	private function get_installment_payment_summary( array $installment_ids, $include_payments = false ) {
@@ -1633,12 +1711,6 @@ class Pusula_Lite_API {
 		}
 
 		$requested_id = absint( $request->get_param( 'id' ) );
-		if ( $requested_id ) {
-			$exists = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE id = %d", $requested_id ) );
-			if ( $exists ) {
-				$requested_id = 0;
-			}
-		}
 		$customer_id = $requested_id ? $requested_id : $this->get_lowest_available_customer_id();
 
 		$data = array(
@@ -1650,6 +1722,25 @@ class Pusula_Lite_API {
 			'notes'             => sanitize_textarea_field( $request->get_param( 'notes' ) ),
 			'registration_date' => $request->get_param( 'registration_date' ) ? sanitize_text_field( $request->get_param( 'registration_date' ) ) : current_time( 'Y-m-d' ),
 		);
+		$contacts = $this->normalize_contacts_payload( $request->get_param( 'contacts' ) );
+
+		if ( $requested_id ) {
+			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $requested_id ), ARRAY_A );
+			if ( $existing ) {
+				if ( $this->customer_data_matches( $existing, $data ) ) {
+					if ( $contacts ) {
+						$this->store_contacts( $requested_id, $contacts );
+					}
+					return rest_ensure_response(
+						array(
+							'id' => $requested_id,
+						)
+					);
+				}
+
+				return new WP_Error( 'customer_id_exists', 'Bu müşteri numarası zaten kullanılıyor. Listeyi yenileyip tekrar deneyin.', array( 'status' => 409 ) );
+			}
+		}
 
 		$inserted = $wpdb->insert(
 			$table,
@@ -1657,10 +1748,20 @@ class Pusula_Lite_API {
 			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 		if ( false === $inserted ) {
+			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $customer_id ), ARRAY_A );
+			if ( $existing && $this->customer_data_matches( $existing, $data ) ) {
+				if ( $contacts ) {
+					$this->store_contacts( $customer_id, $contacts );
+				}
+				return rest_ensure_response(
+					array(
+						'id' => $customer_id,
+					)
+				);
+			}
 			return new WP_Error( 'insert_failed', 'Müşteri kaydı oluşturulamadı.', array( 'status' => 500 ) );
 		}
 
-		$contacts = $request->get_param( 'contacts' );
 		if ( $contacts ) {
 			$this->store_contacts( $customer_id, $contacts );
 		}
@@ -1759,9 +1860,10 @@ class Pusula_Lite_API {
 	private function store_contacts( $customer_id, $contacts ) {
 		global $wpdb;
 		$table = $this->get_table( 'contacts' );
+		$contacts = $this->normalize_contacts_payload( $contacts );
 		$wpdb->delete( $table, array( 'customer_id' => $customer_id ), array( '%d' ) );
 
-		if ( empty( $contacts ) || ! is_array( $contacts ) ) {
+		if ( empty( $contacts ) ) {
 			return;
 		}
 
@@ -1770,10 +1872,10 @@ class Pusula_Lite_API {
 				$table,
 				array(
 					'customer_id'   => $customer_id,
-					'name'          => isset( $contact['name'] ) ? sanitize_text_field( $contact['name'] ) : '',
-					'phone'         => isset( $contact['phone'] ) ? sanitize_text_field( $contact['phone'] ) : '',
-					'home_address'  => isset( $contact['home_address'] ) ? sanitize_text_field( $contact['home_address'] ) : '',
-					'work_address'  => isset( $contact['work_address'] ) ? sanitize_text_field( $contact['work_address'] ) : '',
+					'name'          => $contact['name'],
+					'phone'         => $contact['phone'],
+					'home_address'  => $contact['home_address'],
+					'work_address'  => $contact['work_address'],
 				),
 				array( '%d', '%s', '%s', '%s', '%s' )
 			);
@@ -1967,6 +2069,14 @@ class Pusula_Lite_API {
 		if ( ! $customer_id ) {
 			return new WP_Error( 'missing_customer', 'Müşteri numarası zorunludur.', array( 'status' => 400 ) );
 		}
+		$has_request_key = $this->ensure_sales_request_key_column();
+		$request_key     = $has_request_key ? $this->sanitize_request_key( $request->get_param( 'request_key' ) ) : '';
+		if ( $has_request_key && $request_key ) {
+			$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE request_key = %s", $request_key ) );
+			if ( $existing_id ) {
+				return rest_ensure_response( array( 'id' => $existing_id ) );
+			}
+		}
 
 		$data = array(
 			'customer_id' => $customer_id,
@@ -1974,12 +2084,26 @@ class Pusula_Lite_API {
 			'total'       => $request->get_param( 'total' ),
 			'description' => sanitize_textarea_field( $request->get_param( 'description' ) ),
 		);
+		$formats = array( '%d', '%s', '%f', '%s' );
+		if ( $has_request_key ) {
+			$data['request_key'] = $request_key ? $request_key : null;
+			$formats[]           = '%s';
+		}
 
-		$wpdb->insert(
+		$inserted = $wpdb->insert(
 			$table,
 			$data,
-			array( '%d', '%s', '%f', '%s' )
+			$formats
 		);
+		if ( false === $inserted ) {
+			if ( $has_request_key && $request_key ) {
+				$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE request_key = %s", $request_key ) );
+				if ( $existing_id ) {
+					return rest_ensure_response( array( 'id' => $existing_id ) );
+				}
+			}
+			return new WP_Error( 'sale_insert_failed', 'Satış kaydı oluşturulamadı.', array( 'status' => 500 ) );
+		}
 
 		return rest_ensure_response( array( 'id' => $wpdb->insert_id ) );
 	}
