@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pusula Lite API
  * Description: REST API for the Pusula Lite desktop app (customers, sales, installments) with API key + simple record locking.
- * Version: 1.3.3
+ * Version: 1.3.4
  * Update URI: https://github.com/stronganchor/pusula-lite
  * Author: Pusula Lite
  */
@@ -58,7 +58,7 @@ function pusula_lite_api_bootstrap_update_checker() {
 pusula_lite_api_bootstrap_update_checker();
 
 class Pusula_Lite_API {
-	const VERSION                      = '1.3.3';
+	const VERSION                      = '1.3.4';
 	const LEGACY_PROFILE_MIGRATION_VER = '1.1.0';
 	const OPTION_KEY                   = 'pusula_lite_api_key';
 	const OPTION_BUSINESS_PROFILE      = 'pusula_lite_business_profile';
@@ -703,7 +703,7 @@ class Pusula_Lite_API {
 						<button data-tab="add">MÜŞTERİ BİLGİLERİ</button>
 						<button data-tab="sale">SATIŞ KAYDET</button>
 						<button data-tab="detail">TAKSİTLİ SATIŞ KAYIT BİLGİSİ</button>
-						<button data-tab="report">GÜNLÜK SATIŞ RAPORU</button>
+						<button data-tab="report">GÜNLÜK TAHSİLAT RAPORU</button>
 						<button data-tab="expected">BEKLENEN ÖDEMELER</button>
 					</div>
 				</div>
@@ -835,6 +835,20 @@ class Pusula_Lite_API {
 					'with' => array(
 						'sanitize_callback' => 'sanitize_text_field',
 					),
+				),
+			)
+		);
+
+		register_rest_route(
+			$namespace,
+			'/daily-report',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_daily_report' ),
+				'permission_callback' => array( $this, 'permission_callback' ),
+				'args'                => array(
+					'start' => array( 'sanitize_callback' => 'sanitize_text_field' ),
+					'end'   => array( 'sanitize_callback' => 'sanitize_text_field' ),
 				),
 			)
 		);
@@ -1537,6 +1551,161 @@ class Pusula_Lite_API {
 		return $filtered;
 	}
 
+	private function get_daily_report_rows( $start = '', $end = '' ) {
+		global $wpdb;
+
+		$sales_table = $this->get_table( 'sales' );
+		$inst_table  = $this->get_table( 'installments' );
+		$pay_table   = $this->get_table( 'installment_payments' );
+		$cust_table  = $this->get_table( 'customers' );
+		$start       = $start ? sanitize_text_field( $start ) : '';
+		$end         = $end ? sanitize_text_field( $end ) : '';
+		$rows        = array();
+
+		$sale_where  = array( '1=1' );
+		$sale_params = array();
+		if ( $start ) {
+			$sale_where[]  = 's.date >= %s';
+			$sale_params[] = $start;
+		}
+		if ( $end ) {
+			$sale_where[]  = 's.date <= %s';
+			$sale_params[] = $end;
+		}
+
+		$sale_sql = "SELECT
+				s.id AS sale_id,
+				s.customer_id,
+				s.date,
+				s.total AS sale_total,
+				s.description,
+				c.name AS customer_name,
+				COALESCE(i.installment_count, 0) AS installment_count,
+				COALESCE(i.installments_total, 0) AS installments_total
+			FROM {$sales_table} s
+			LEFT JOIN {$cust_table} c ON c.id = s.customer_id
+			LEFT JOIN (
+				SELECT sale_id, COUNT(*) AS installment_count, SUM(amount) AS installments_total
+				FROM {$inst_table}
+				GROUP BY sale_id
+			) i ON i.sale_id = s.id
+			WHERE " . implode( ' AND ', $sale_where );
+
+		if ( $sale_params ) {
+			$sale_sql = $wpdb->prepare( $sale_sql, $sale_params );
+		}
+
+		$sale_rows = $wpdb->get_results( $sale_sql, ARRAY_A );
+		foreach ( $sale_rows as $sale_row ) {
+			$sale_id           = (int) $sale_row['sale_id'];
+			$installment_count = (int) $sale_row['installment_count'];
+			$sale_total        = $this->to_money_float( $sale_row['sale_total'] );
+			$installments_total = $this->to_money_float( $sale_row['installments_total'] );
+			$report_amount     = $installment_count > 0
+				? $this->to_money_float( max( 0, $sale_total - $installments_total ) )
+				: $sale_total;
+
+			if ( $report_amount <= 0.00001 ) {
+				continue;
+			}
+
+			$rows[] = array(
+				'event_id'          => 'sale-' . $sale_id,
+				'event_type'        => $installment_count > 0 ? 'down_payment' : 'sale',
+				'id'                => $sale_id,
+				'sale_id'           => $sale_id,
+				'payment_id'        => null,
+				'installment_id'    => null,
+				'customer_id'       => (int) $sale_row['customer_id'],
+				'customer_name'     => $sale_row['customer_name'],
+				'date'              => $sale_row['date'],
+				'total'             => $report_amount,
+				'amount'            => $report_amount,
+				'sale_total'        => $sale_total,
+				'description'       => $sale_row['description'],
+				'_sort_id'          => $sale_id,
+			);
+		}
+
+		$payment_where  = array( '1=1' );
+		$payment_params = array();
+		if ( $start ) {
+			$payment_where[]  = 'p.payment_date >= %s';
+			$payment_params[] = $start;
+		}
+		if ( $end ) {
+			$payment_where[]  = 'p.payment_date <= %s';
+			$payment_params[] = $end;
+		}
+
+		$payment_sql = "SELECT
+				p.id AS payment_id,
+				p.installment_id,
+				p.amount,
+				p.payment_date,
+				i.sale_id,
+				s.customer_id,
+				s.total AS sale_total,
+				s.description,
+				c.name AS customer_name
+			FROM {$pay_table} p
+			INNER JOIN {$inst_table} i ON i.id = p.installment_id
+			INNER JOIN {$sales_table} s ON s.id = i.sale_id
+			LEFT JOIN {$cust_table} c ON c.id = s.customer_id
+			WHERE " . implode( ' AND ', $payment_where );
+
+		if ( $payment_params ) {
+			$payment_sql = $wpdb->prepare( $payment_sql, $payment_params );
+		}
+
+		$payment_rows = $wpdb->get_results( $payment_sql, ARRAY_A );
+		foreach ( $payment_rows as $payment_row ) {
+			$payment_id    = (int) $payment_row['payment_id'];
+			$sale_id       = (int) $payment_row['sale_id'];
+			$payment_amount = $this->to_money_float( $payment_row['amount'] );
+
+			if ( $payment_amount <= 0.00001 ) {
+				continue;
+			}
+
+			$rows[] = array(
+				'event_id'       => 'payment-' . $payment_id,
+				'event_type'     => 'installment_payment',
+				'id'             => $sale_id,
+				'sale_id'        => $sale_id,
+				'payment_id'     => $payment_id,
+				'installment_id' => (int) $payment_row['installment_id'],
+				'customer_id'    => (int) $payment_row['customer_id'],
+				'customer_name'  => $payment_row['customer_name'],
+				'date'           => $payment_row['payment_date'],
+				'total'          => $payment_amount,
+				'amount'         => $payment_amount,
+				'sale_total'     => $this->to_money_float( $payment_row['sale_total'] ),
+				'description'    => $payment_row['description'],
+				'_sort_id'       => $payment_id,
+			);
+		}
+
+		usort(
+			$rows,
+			function( $a, $b ) {
+				$date_a = isset( $a['date'] ) ? (string) $a['date'] : '';
+				$date_b = isset( $b['date'] ) ? (string) $b['date'] : '';
+				if ( $date_a !== $date_b ) {
+					return strcmp( $date_b, $date_a );
+				}
+				return (int) $b['_sort_id'] <=> (int) $a['_sort_id'];
+			}
+		);
+
+		foreach ( $rows as &$row ) {
+			unset( $row['_sort_id'] );
+		}
+		unset( $row );
+
+		return $rows;
+	}
+
 	// ---------------------------------------------------------------------
 	// Customers
 	// ---------------------------------------------------------------------
@@ -2003,6 +2172,12 @@ class Pusula_Lite_API {
 		$start = $request->get_param( 'start' );
 		$end   = $request->get_param( 'end' );
 		return rest_ensure_response( $this->get_expected_payment_rows( $start, $end ) );
+	}
+
+	public function get_daily_report( WP_REST_Request $request ) {
+		$start = $request->get_param( 'start' );
+		$end   = $request->get_param( 'end' );
+		return rest_ensure_response( $this->get_daily_report_rows( $start, $end ) );
 	}
 
 	public function get_sale( WP_REST_Request $request ) {

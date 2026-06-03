@@ -146,7 +146,12 @@
   const defaultDueDay = () => Math.min(new Date().getDate(), 28);
 
   const isPaid = (val) => Number(val) === 1;
-  const installmentAmount = (inst) => Number(inst && inst.amount ? inst.amount : 0);
+  const moneyNumber = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? Math.round(num * 100) / 100 : 0;
+  };
+  const saleInstallments = (sale) => (sale && Array.isArray(sale.installments) ? sale.installments : []);
+  const installmentAmount = (inst) => moneyNumber(inst && inst.amount ? inst.amount : 0);
   const installmentPaidAmount = (inst) => {
     if (!inst) return 0;
     if (Number.isFinite(Number(inst.paid_amount))) return Number(inst.paid_amount);
@@ -164,6 +169,13 @@
     const insts = sale && sale.installments;
     if (!Array.isArray(insts) || !insts.length) return false;
     return insts.some((inst) => installmentRemainingAmount(inst) > 0);
+  };
+  const saleReportCashAmount = (sale) => {
+    const saleTotal = moneyNumber(sale && sale.total);
+    const insts = saleInstallments(sale);
+    if (!insts.length) return saleTotal;
+    const totalInst = insts.reduce((sum, inst) => sum + installmentAmount(inst), 0);
+    return moneyNumber(Math.max(0, saleTotal - totalInst));
   };
 
   function openOfflineDb() {
@@ -446,6 +458,70 @@
       });
   }
 
+  function filterOfflineDailyReport(searchParams) {
+    const rows = extractSnapshotArray('sales');
+    const start = String(searchParams.get('start') || '').trim();
+    const end = String(searchParams.get('end') || '').trim();
+    const reportRows = [];
+
+    rows.forEach((sale) => {
+      const saleDate = String(sale.date || '');
+      const saleId = Number(sale.id || 0);
+      const saleAmount = saleReportCashAmount(sale);
+      const insts = saleInstallments(sale);
+
+      if ((!start || saleDate >= start) && (!end || saleDate <= end) && saleAmount > 0) {
+        reportRows.push({
+          event_id: `sale-${saleId}`,
+          event_type: insts.length ? 'down_payment' : 'sale',
+          id: saleId,
+          sale_id: saleId,
+          payment_id: null,
+          installment_id: null,
+          customer_id: Number(sale.customer_id || 0),
+          customer_name: sale.customer_name || '',
+          date: saleDate,
+          total: saleAmount,
+          amount: saleAmount,
+          sale_total: moneyNumber(sale.total),
+          description: sale.description || '',
+        });
+      }
+
+      insts.forEach((inst) => {
+        const payments = Array.isArray(inst.payments) ? inst.payments : [];
+        payments.forEach((payment) => {
+          const paymentDate = String(payment.payment_date || '');
+          const amount = moneyNumber(payment.amount);
+          if ((!start || paymentDate >= start) && (!end || paymentDate <= end) && amount > 0) {
+            reportRows.push({
+              event_id: `payment-${payment.id || ''}`,
+              event_type: 'installment_payment',
+              id: saleId,
+              sale_id: saleId,
+              payment_id: payment.id || null,
+              installment_id: inst.id || inst.installment_id || null,
+              customer_id: Number(sale.customer_id || 0),
+              customer_name: sale.customer_name || '',
+              date: paymentDate,
+              total: amount,
+              amount,
+              sale_total: moneyNumber(sale.total),
+              description: sale.description || '',
+            });
+          }
+        });
+      });
+    });
+
+    return reportRows.sort((a, b) => {
+      const dateA = String(a.date || '');
+      const dateB = String(b.date || '');
+      if (dateA !== dateB) return dateB.localeCompare(dateA);
+      return String(b.event_id || '').localeCompare(String(a.event_id || ''));
+    });
+  }
+
   function filterOfflineExpectedPayments(searchParams) {
     const rows = extractSnapshotArray('expected_payments');
     const start = String(searchParams.get('start') || '').trim();
@@ -472,6 +548,10 @@
 
     if (pathname === '/sales') {
       return filterOfflineSales(url.searchParams);
+    }
+
+    if (pathname === '/daily-report') {
+      return filterOfflineDailyReport(url.searchParams);
     }
 
     if (pathname === '/expected-payments') {
@@ -2892,6 +2972,18 @@
     loadReport();
   }
 
+  function formatReportDescription(row) {
+    const base = String(row && row.description ? row.description : '').trim();
+    if (row && row.event_type === 'installment_payment') {
+      const label = row.installment_id ? `Taksit tahsilatı #${row.installment_id}` : 'Taksit tahsilatı';
+      return base ? `${label} - ${base}` : label;
+    }
+    if (row && row.event_type === 'down_payment') {
+      return base ? `Peşinat - ${base}` : 'Peşinat';
+    }
+    return base;
+  }
+
   function renderReportTab() {
     const root = document.getElementById('pusula-tab-report');
     if (!root) return;
@@ -2910,10 +3002,10 @@
         <button type="button" class="secondary" data-range="this-month">BU AY</button>
         <button type="button" class="secondary" data-range="last-month">GEÇEN AY</button>
       </div>
-      <div class="pusula-summary"><span id="rep-total">0,00₺</span> — <span id="rep-count">0</span> satış</div>
+      <div class="pusula-summary"><span id="rep-total">0,00₺</span> — <span id="rep-count">0</span> tahsilat</div>
       <div class="pusula-table-wrapper">
         <table class="pusula-table" id="rep-table">
-          <thead><tr><th>No</th><th>Müşteri</th><th>Tarih</th><th>Tutar</th><th>Açıklama</th></tr></thead>
+          <thead><tr><th>Satış No</th><th>Müşteri</th><th>Tarih</th><th>Tutar</th><th>Açıklama</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -2970,23 +3062,27 @@
     const start = startEl.value || todayStr();
     const end = endEl.value || todayStr();
     try {
-      const rows = await api(`/sales?start=${toISO(start)}&end=${toISO(end)}`);
+      const rows = await api(`/daily-report?start=${toISO(start)}&end=${toISO(end)}`);
       state.reportSales = rows || [];
-      const total = rows.reduce((sum, s) => sum + Number(s.total || 0), 0);
+      const total = rows.reduce((sum, s) => sum + Number(s.amount ?? s.total ?? 0), 0);
       document.getElementById('rep-total').textContent = formatMoney(total);
       document.getElementById('rep-count').textContent = rows.length;
       const tbody = document.querySelector('#rep-table tbody');
       tbody.innerHTML = '';
       rows.forEach((s) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${s.id}</td><td>${s.customer_name || ''}</td><td>${fromISO(s.date)}</td><td>${formatMoney(s.total || 0)}</td><td>${truncateDescription(s.description || '')}</td>`;
+        const saleId = s.sale_id || s.id || '';
+        const amount = Number(s.amount ?? s.total ?? 0);
+        tr.innerHTML = `<td>${saleId}</td><td>${s.customer_name || ''}</td><td>${fromISO(s.date)}</td><td>${formatMoney(amount)}</td><td>${truncateDescription(formatReportDescription(s))}</td>`;
         tr.addEventListener('dblclick', (e) => {
           e.preventDefault();
+          if (!saleId) return;
           const descCell = tr.querySelector('td:last-child');
-          openSaleDescriptionEditor(s, {
+          openSaleDescriptionEditor({ ...s, id: saleId }, {
             customer: { id: s.customer_id, name: s.customer_name },
             onUpdated: (next) => {
-              if (descCell) descCell.textContent = truncateDescription(next || '');
+              s.description = next || '';
+              if (descCell) descCell.textContent = truncateDescription(formatReportDescription(s));
             },
           });
         });
