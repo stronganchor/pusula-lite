@@ -11,9 +11,11 @@
     snapshotSyncHandle: null,
     snapshotSyncMs: 300000,
     selected: null,
+    selectionSeq: 0,
     pendingCustomerId: null,
     currentSaleExplicit: false,
     sales: [],
+    salesLoadSeq: 0,
     reportSales: [],
     expectedPayments: [],
     currentExpected: null,
@@ -714,6 +716,29 @@
     renderTable(filterCustomers(base || [], fields));
   }
 
+  function customerIdOf(customer) {
+    return String(customer && customer.id != null ? customer.id : '').trim();
+  }
+
+  function setSelectedCustomer(customer) {
+    const next = customer || null;
+    const prevId = customerIdOf(state.selected);
+    const nextId = customerIdOf(next);
+    state.selected = next;
+    state.pendingCustomerId = null;
+    if (prevId !== nextId) state.selectionSeq += 1;
+    return state.selected;
+  }
+
+  function selectedCustomerSnapshot() {
+    if (!state.selected || !customerIdOf(state.selected)) return null;
+    return { ...state.selected };
+  }
+
+  function isSelectedCustomerStillCurrent(customerId, selectionSeq) {
+    return selectionSeq === state.selectionSeq && customerIdOf(state.selected) === String(customerId || '').trim();
+  }
+
   const trErrorMessage = (msg) => {
     if (!msg) return 'Bilinmeyen hata.';
     const normalized = String(msg).toLowerCase();
@@ -1142,11 +1167,17 @@
       });
     });
     document.getElementById('nav-edit').addEventListener('click', async () => {
-      if (state.selected) {
+      const selected = selectedCustomerSnapshot();
+      if (!selected) return;
+      const selectedId = customerIdOf(selected);
+      const selectionSeq = state.selectionSeq;
+      if (selected) {
         try {
-          const full = await fetchCustomerById(state.selected.id);
-          if (full) state.selected = full;
+          const full = await fetchCustomerById(selectedId);
+          if (!isSelectedCustomerStillCurrent(selectedId, selectionSeq)) return;
+          if (full) setSelectedCustomer(full);
         } catch (err) {
+          if (!isSelectedCustomerStillCurrent(selectedId, selectionSeq)) return;
           setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
         }
         if (!Array.isArray(state.selected.contacts)) {
@@ -1154,21 +1185,23 @@
           return;
         }
         fillCustomerForm(state.selected);
-        document.querySelector('button[data-tab="add"]').click();
+        activateTab('add');
       }
     });
     document.getElementById('nav-sale').addEventListener('click', () => {
-      if (state.selected) {
-        fillSaleCustomer(state.selected);
-        document.querySelector('button[data-tab="sale"]').click();
-      }
+      const selected = selectedCustomerSnapshot();
+      if (!selected) return;
+      setSelectedCustomer(selected);
+      fillSaleCustomer(selected);
+      activateTab('sale');
     });
     document.getElementById('nav-detail').addEventListener('click', () => {
-      if (state.selected) {
-        updateDetail(state.selected);
-        document.querySelector('button[data-tab="detail"]').click();
-        loadSales(state.selected.id);
-      }
+      const selected = selectedCustomerSnapshot();
+      if (!selected) return;
+      setSelectedCustomer(selected);
+      updateDetail(selected);
+      activateTab('detail');
+      loadSales(selected.id);
     });
     document.getElementById('nav-delete').addEventListener('click', deleteCustomer);
     updateReadOnlyUi();
@@ -1187,19 +1220,17 @@
       if (Number(r.late_unpaid) === 1) tr.classList.add('late');
       const isSelected = state.selected && String(state.selected.id) === String(r.id);
       tr.addEventListener('click', () => {
-        state.selected = r;
-        state.pendingCustomerId = null;
+        setSelectedCustomer(r);
         fillSaleCustomer(r);
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         tr.classList.add('selected');
         enableNav(true);
       });
       tr.addEventListener('dblclick', () => {
-        state.selected = r;
-        state.pendingCustomerId = null;
+        setSelectedCustomer(r);
         fillSaleCustomer(r);
         updateDetail(r);
-        document.querySelector('button[data-tab="detail"]').click();
+        activateTab('detail');
         loadSales(r.id);
         tbody.querySelectorAll('tr').forEach((row) => row.classList.remove('selected'));
         tr.classList.add('selected');
@@ -1207,8 +1238,6 @@
       });
       if (isSelected) {
         tr.classList.add('selected');
-        state.selected = r;
-        state.pendingCustomerId = null;
         hasSelection = true;
       }
       tbody.appendChild(tr);
@@ -1298,8 +1327,7 @@
     try {
       await api(`/customers/${state.selected.id}`, { method: 'DELETE' });
       setStatus('Müşteri silindi.');
-      state.selected = null;
-      state.pendingCustomerId = null;
+      setSelectedCustomer(null);
       updateDetail(null);
       fillCustomerForm();
       enableNav(false);
@@ -1393,8 +1421,7 @@
     `;
     root.querySelector('#cust-save').addEventListener('click', saveCustomer);
     root.querySelector('#cust-clear').addEventListener('click', () => {
-      state.selected = null;
-      state.pendingCustomerId = null;
+      setSelectedCustomer(null);
       fillCustomerForm();
     });
     const custIdInput = root.querySelector('#cust-id');
@@ -1438,7 +1465,7 @@
       else el.textContent = val || '';
     };
     if (!cust) {
-      state.selected = null;
+      setSelectedCustomer(null);
       ['cust-id','cust-name','cust-phone','cust-address','cust-work','cust-notes','c1-name','c1-phone','c1-home','c1-work','c2-name','c2-phone','c2-home','c2-work'].forEach((id) => set(id, ''));
       const localNext = nextCustomerId();
       set('cust-id', String(localNext));
@@ -1448,8 +1475,7 @@
       refreshNewCustomerIdFromServer(localNext);
       return;
     }
-    state.selected = cust;
-    state.pendingCustomerId = null;
+    setSelectedCustomer(cust);
     set('cust-id', cust.id || '');
     set('cust-date-label', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
     set('cust-date-hidden', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
@@ -1601,8 +1627,7 @@
         if (baseIdx >= 0) state.customerBase[baseIdx] = newCust;
         else state.customerBase.unshift(newCust);
       }
-      state.selected = newCust;
-      state.pendingCustomerId = null;
+      setSelectedCustomer(newCust);
       renderTable(state.customers);
       enableNav(true);
       updateDetail(newCust);
@@ -1715,9 +1740,9 @@
           return;
         }
         const cust = await fetchCustomerById(id);
+        if (custIdEl.value.trim() !== id) return;
         if (cust) {
-          state.selected = cust;
-          state.pendingCustomerId = null;
+          setSelectedCustomer(cust);
           fillSaleCustomer(cust);
         } else if (nameEl) {
           nameEl.value = '';
@@ -1771,8 +1796,7 @@
           setStatus('Hata: Müşteri bulunamadı.', true);
           return;
         }
-        state.selected = cust;
-        state.pendingCustomerId = null;
+        setSelectedCustomer(cust);
         fillSaleCustomer(cust);
       }
       const total = parseFloat(document.getElementById('sale-total').value);
@@ -2086,11 +2110,16 @@
   }
 
   async function loadSales(customerId, selectedSaleId = null) {
+    const selectedId = String(customerId || '').trim();
+    const seq = ++state.salesLoadSeq;
     try {
-      state.sales = await api(`/sales?customer_id=${customerId}&with=installments`);
+      const sales = await api(`/sales?customer_id=${customerId}&with=installments`);
+      if (seq !== state.salesLoadSeq || (state.selected && customerIdOf(state.selected) !== selectedId)) return;
+      state.sales = sales;
       renderSalesTable(state.sales, { selectedSaleId });
       syncSelectedCustomerDebt();
     } catch (err) {
+      if (seq !== state.salesLoadSeq || (state.selected && customerIdOf(state.selected) !== selectedId)) return;
       setStatus(`Hata: ${trErrorMessage(err.message)}`, true);
       state.sales = [];
       renderSalesTable([], { selectedSaleId });
@@ -3318,8 +3347,7 @@
       work_address: row.customer_work_address || '',
       debt_total: 0,
     };
-    state.selected = cust;
-    state.pendingCustomerId = null;
+    setSelectedCustomer(cust);
     updateDetail(cust);
     fillSaleCustomer(cust);
     activateTab('detail');
