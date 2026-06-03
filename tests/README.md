@@ -10,9 +10,14 @@ This checks:
 
 - PHP syntax for `pusula-lite-api.php`
 - JavaScript syntax for `assets/pusula-app.js`
-- source regressions for daily report payment amounts
-- source regressions for stale customer navigation selection
+- route, auth, customer, sale, installment, payment, report, expected-payment,
+  offline snapshot, offline filter, and stale navigation source regressions
 - `git diff --check`
+
+Run this suite and update it when making plugin behavior changes. In particular,
+changes to customer, sale, installment, payment, report, expected-payment,
+offline, or navigation behavior should add or adjust regression coverage in the
+same commit.
 
 Optional local API integration test:
 
@@ -22,6 +27,8 @@ Optional local API integration test:
   -WpPath 'C:\Users\messy\Local Sites\enes-beko-local\app\public\wp-load.php'
 ```
 
-The local API test creates a temporary customer, sale, installment, and payment,
-verifies the daily report uses the payment amount rather than the full sale
-amount, then deletes the temporary customer.
+The local API test covers the main REST workflow: auth, customer create/read/
+update/search with contacts, sale create/update/idempotency, installment create/
+update/totals, payment create/history, daily report payment and down-payment
+amounts, expected payments, offline snapshot contents, and customer delete
+cascade cleanup.
