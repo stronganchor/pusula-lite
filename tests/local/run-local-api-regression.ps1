@@ -88,20 +88,35 @@ $apiBase = "$base/wp-json/pusula/v1"
 $headers = @{ 'x-api-key' = $ApiKey }
 $customerId = $null
 
+function Merge-Headers {
+    param([hashtable] $Additional = @{})
+
+    $merged = @{}
+    foreach ($key in $headers.Keys) {
+        $merged[$key] = $headers[$key]
+    }
+    foreach ($key in $Additional.Keys) {
+        $merged[$key] = $Additional[$key]
+    }
+    return $merged
+}
+
 function Invoke-PusulaApi {
     param(
         [ValidateSet('GET', 'POST', 'PUT', 'DELETE')] [string] $Method,
         [string] $Path,
-        [object] $Body = $null
+        [object] $Body = $null,
+        [hashtable] $ExtraHeaders = @{}
     )
 
     $uri = "$apiBase$Path"
+    $requestHeaders = Merge-Headers -Additional $ExtraHeaders
     if ($null -eq $Body) {
-        return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers
+        return Invoke-RestMethod -Method $Method -Uri $uri -Headers $requestHeaders
     }
 
     $json = $Body | ConvertTo-Json -Depth 10
-    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers -ContentType 'application/json' -Body $json
+    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $requestHeaders -ContentType 'application/json' -Body $json
 }
 
 function Invoke-PusulaApiStatus {
@@ -232,6 +247,35 @@ try {
     Assert-True ($updatedCustomer.name -eq $updatedMarker) 'Customer update did not persist the new name.'
     Assert-True (@(ConvertTo-List $updatedCustomer.contacts).Count -eq 1) 'Customer update did not replace contacts.'
 
+    $lockBody = @{
+        record_type = 'customer'
+        record_id = $customerId
+        mode = 'write'
+    }
+    $deviceA = "codex-lock-a-$stamp"
+    $deviceB = "codex-lock-b-$stamp"
+    $deviceAHeader = @{ 'x-device-id' = $deviceA }
+    $deviceBHeader = @{ 'x-device-id' = $deviceB }
+
+    $missingDeviceLock = Invoke-PusulaApiStatus -Method POST -Path '/locks' -Headers $headers -Body $lockBody
+    Assert-True ($missingDeviceLock.StatusCode -eq 400) "Lock without X-Device-Id returned $($missingDeviceLock.StatusCode), expected 400."
+
+    $lockA = Invoke-PusulaApi -Method POST -Path '/locks' -Body $lockBody -ExtraHeaders $deviceAHeader
+    Assert-True ([bool] $lockA.locked) 'Device A did not acquire the write lock.'
+    Assert-True ($lockA.mode -eq 'write') 'Device A lock mode was not write.'
+
+    $lockConflict = Invoke-PusulaApiStatus -Method POST -Path '/locks' -Headers (Merge-Headers -Additional $deviceBHeader) -Body $lockBody
+    Assert-True ($lockConflict.StatusCode -eq 409) "Conflicting write lock returned $($lockConflict.StatusCode), expected 409."
+
+    $releaseA = Invoke-PusulaApi -Method POST -Path '/locks/release' -Body $lockBody -ExtraHeaders $deviceAHeader
+    Assert-True ([bool] $releaseA.released) 'Device A did not release the lock.'
+
+    $lockB = Invoke-PusulaApi -Method POST -Path '/locks' -Body $lockBody -ExtraHeaders $deviceBHeader
+    Assert-True ([bool] $lockB.locked) 'Device B did not acquire the lock after release.'
+
+    $releaseB = Invoke-PusulaApi -Method POST -Path '/locks/release' -Body $lockBody -ExtraHeaders $deviceBHeader
+    Assert-True ([bool] $releaseB.released) 'Device B did not release the lock.'
+
     $saleRequestKey = "codex-full-regression-$stamp"
     $sale = Invoke-PusulaApi -Method POST -Path '/sales' -Body @{
         customer_id = $customerId
@@ -340,6 +384,15 @@ try {
     Assert-True (@((ConvertTo-List $offlineSnapshot.sales) | Where-Object { [string] $_.id -eq [string] $saleId }).Count -eq 1) 'Offline snapshot did not include the sale.'
     Assert-True (@((ConvertTo-List $offlineSnapshot.expected_payments) | Where-Object { [string] $_.installment_id -eq [string] $installmentId }).Count -eq 1) 'Offline snapshot did not include expected payments.'
 
+    $deletePayment = Invoke-PusulaApi -Method DELETE -Path "/installments/$installmentId/payments/$paymentId"
+    Assert-True ([bool] $deletePayment.deleted) 'Payment delete did not report success.'
+    Assert-Near ([double] $deletePayment.installment.paid_amount) 0.00 'Payment delete did not reset paid amount.'
+    Assert-Near ([double] $deletePayment.installment.remaining_amount) $installmentAmount 'Payment delete did not restore remaining amount.'
+    Assert-True (@(ConvertTo-List $deletePayment.installment.payments).Count -eq 0) 'Deleted payment remained on installment payload.'
+
+    $paymentHistoryAfterDelete = Invoke-PusulaApi -Method GET -Path "/installments/$installmentId/payments"
+    Assert-True (@(ConvertTo-List $paymentHistoryAfterDelete.payments).Count -eq 0) 'Payment history still included deleted payment.'
+
     Invoke-PusulaApi -Method DELETE -Path "/customers/$customerId" | Out-Null
     $deletedCustomerId = $customerId
     $customerId = $null
@@ -360,11 +413,13 @@ try {
             'auth',
             'customer_create_read_update_search_contacts',
             'sale_create_update_idempotency',
+            'lock_acquire_conflict_release',
             'installment_create_update_totals',
             'payment_create_history',
             'daily_report_payment_and_down_payment_amounts',
             'expected_payments',
             'offline_snapshot',
+            'payment_delete_recalculation',
             'customer_delete_cascade'
         )
     } | ConvertTo-Json -Depth 5

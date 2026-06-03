@@ -144,6 +144,15 @@ test('expected payments report keeps unpaid rows and payments completed today', 
   assert.match(expectedPayments, /\$row\['installment_amount'\]\s*=\s*\$this->to_money_float/);
 });
 
+test('payment deletion recalculates installment status and returns refreshed payload', () => {
+  const deletePayment = extractBlock(apiSource, 'public function delete_installment_payment');
+
+  assert.match(deletePayment, /\$wpdb->delete\(\s*\$pay_table,\s*array\(\s*'id'\s*=>\s*\$payment_id\s*\)/);
+  assert.match(deletePayment, /\$this->recalculate_installment_payment_status\(\s*\$id\s*\)/);
+  assert.match(deletePayment, /'deleted'\s*=>\s*true/);
+  assert.match(deletePayment, /'installment'\s*=>\s*\$this->get_installment_row_with_payments\(\s*\$id,\s*true\s*\)/);
+});
+
 test('offline snapshot includes customers, sales with installments, business profile, and expected payments', () => {
   const snapshot = extractBlock(apiSource, 'public function get_offline_snapshot');
 
@@ -156,6 +165,23 @@ test('offline snapshot includes customers, sales with installments, business pro
   assert.match(snapshot, /'customers'\s*=>\s*\$customers/);
   assert.match(snapshot, /'sales'\s*=>\s*\$sales/);
   assert.match(snapshot, /'expected_payments'\s*=>\s*\$this->get_expected_payment_rows\(\)/);
+});
+
+test('lock API requires device ids, detects write conflicts, and releases by device', () => {
+  const requireDevice = extractBlock(apiSource, 'private function require_device_id');
+  const acquireLock = extractBlock(apiSource, 'public function acquire_lock');
+  const releaseLock = extractBlock(apiSource, 'public function release_lock');
+
+  assert.match(requireDevice, /\$request->get_header\(\s*'x-device-id'\s*\)/);
+  assert.match(requireDevice, /new WP_Error\(\s*'missing_device'/);
+  assert.match(acquireLock, /\$this->purge_expired_locks\(\)/);
+  assert.match(acquireLock, /mode = 'write' AND device_id <> %s/);
+  assert.match(acquireLock, /new WP_Error\(\s*'lock_conflict'/);
+  assert.match(acquireLock, /\$wpdb->replace\(/);
+  assert.match(releaseLock, /\$this->require_device_id\(\s*\$request\s*\)/);
+  assert.match(releaseLock, /'device_id'\s*=>\s*\$device/);
+  assert.match(releaseLock, /\$wpdb->delete\(/);
+  assert.match(releaseLock, /'released'\s*=>\s*true/);
 });
 
 test('offline daily report shim uses installment payment amount', () => {

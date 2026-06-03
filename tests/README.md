@@ -10,8 +10,9 @@ This checks:
 
 - PHP syntax for `pusula-lite-api.php`
 - JavaScript syntax for `assets/pusula-app.js`
-- route, auth, customer, sale, installment, payment, report, expected-payment,
-  offline snapshot, offline filter, and stale navigation source regressions
+- route, auth, customer, sale, installment, payment create/delete, lock,
+  report, expected-payment, offline snapshot, offline filter, and stale
+  navigation source regressions
 - `git diff --check`
 
 Run this suite and update it when making plugin behavior changes. In particular,
@@ -28,7 +29,7 @@ Optional local API integration test:
 ```
 
 The local API test covers the main REST workflow: auth, customer create/read/
-update/search with contacts, sale create/update/idempotency, installment create/
-update/totals, payment create/history, daily report payment and down-payment
-amounts, expected payments, offline snapshot contents, and customer delete
-cascade cleanup.
+update/search with contacts, lock acquire/conflict/release, sale create/update/
+idempotency, installment create/update/totals, payment create/history/delete,
+daily report payment and down-payment amounts, expected payments, offline
+snapshot contents, and customer delete cascade cleanup.
