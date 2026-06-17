@@ -212,6 +212,23 @@ test('offline filters cover customers, sales, daily report, and expected payment
   assert.match(offlineApi, /^    throw new Error/m);
 });
 
+test('sale form can start installments in the sale month', () => {
+  const renderSaleTab = extractBlock(appSource, 'function renderSaleTab');
+  const saveSale = extractBlock(appSource, 'async function saveSale');
+  const updateSalePreview = extractBlock(appSource, 'function updateSalePreview');
+  const dueDateHelper = extractBlock(appSource, 'function calculateInstallmentDueDate');
+
+  assert.match(renderSaleTab, /id="sale-first-month"/);
+  assert.match(renderSaleTab, /<option value="1" selected>/);
+  assert.match(renderSaleTab, /<option value="0">/);
+  assert.match(renderSaleTab, /\['sale-date','sale-total','sale-down','sale-n','sale-due','sale-first-month'\]/);
+  assert.match(saveSale, /parseFirstDueMonthOffset\(document\.getElementById\('sale-first-month'\)\?\.value \|\| '1'\)/);
+  assert.match(saveSale, /calculateInstallmentDueDate\(saleBase,\s*dueDay,\s*i,\s*firstDueMonthOffset\)/);
+  assert.match(updateSalePreview, /parseFirstDueMonthOffset\(firstMonthEl\?\.value \|\| '1'\)/);
+  assert.match(updateSalePreview, /calculateInstallmentDueDate\(base,\s*dueDay,\s*nInst,\s*firstDueMonthOffset\)/);
+  assert.match(dueDateHelper, /saleBase\.getMonth\(\) \+ monthOffset \+ Math\.trunc\(installmentIndex\) - 1/);
+});
+
 test('customer table rerender does not passively replace selected customer', () => {
   const renderTable = extractBlock(appSource, 'function renderTable');
 

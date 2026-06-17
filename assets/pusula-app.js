@@ -146,6 +146,25 @@
   };
 
   const defaultDueDay = () => Math.min(new Date().getDate(), 28);
+  const defaultFirstDueMonthOffset = () => 1;
+
+  function parseFirstDueMonthOffset(value) {
+    return String(value) === '0' ? 0 : 1;
+  }
+
+  function calculateInstallmentDueDate(saleBase, dueDay, installmentNumber, firstDueMonthOffset = 1) {
+    if (!(saleBase instanceof Date) || Number.isNaN(saleBase.getTime())) return null;
+
+    const day = Number(dueDay);
+    const installmentIndex = Number(installmentNumber);
+    if (!Number.isFinite(day) || !Number.isFinite(installmentIndex) || installmentIndex < 1) return null;
+
+    const safeDueDay = Math.min(Math.max(Math.trunc(day), 1), 28);
+    const monthOffset = parseFirstDueMonthOffset(firstDueMonthOffset);
+    const dueDate = new Date(saleBase.getFullYear(), saleBase.getMonth() + monthOffset + Math.trunc(installmentIndex) - 1, 1);
+    dueDate.setDate(safeDueDay);
+    return dueDate;
+  }
 
   const isPaid = (val) => Number(val) === 1;
   const moneyNumber = (value) => {
@@ -363,7 +382,7 @@
     document.querySelectorAll('#pusula-tab-add input, #pusula-tab-add textarea').forEach((el) => {
       el.disabled = state.isOfflineMode;
     });
-    document.querySelectorAll('#pusula-tab-sale input, #pusula-tab-sale textarea').forEach((el) => {
+    document.querySelectorAll('#pusula-tab-sale input, #pusula-tab-sale textarea, #pusula-tab-sale select').forEach((el) => {
       el.disabled = state.isOfflineMode;
     });
 
@@ -1663,6 +1682,7 @@
     setVal('sale-down', '0');
     setVal('sale-n', '1');
     setVal('sale-due', String(defaultDueDay()));
+    setVal('sale-first-month', String(defaultFirstDueMonthOffset()));
     setVal('sale-desc', '');
     updateSalePreview();
   }
@@ -1701,6 +1721,13 @@
             <label>Ödeme Günü (1-28)</label>
             <input type="number" id="sale-due" value="${defaultDueDay()}">
           </div>
+          <div class="form-row">
+            <label>İlk Taksit Ayı</label>
+            <select id="sale-first-month">
+              <option value="1" selected>Sonraki ay</option>
+              <option value="0">Satış ayı</option>
+            </select>
+          </div>
           <div class="sale-preview">
             <strong>Önizleme</strong>
             <div><span>Her Taksit Tutarı:</span> <span id="sale-preview-amt">—</span></div>
@@ -1719,16 +1746,27 @@
     `;
     root.querySelector('#sale-save').addEventListener('click', saveSale);
     root.querySelector('#sale-clear').addEventListener('click', () => {
-      ['sale-total','sale-down','sale-n','sale-due','sale-desc'].forEach((id) => {
+      ['sale-total','sale-down','sale-n','sale-due','sale-first-month','sale-desc'].forEach((id) => {
         const el = document.getElementById(id);
-        if (el) el.value = id === 'sale-down' ? '0' : id === 'sale-n' ? '1' : id === 'sale-due' ? String(defaultDueDay()) : '';
+        if (el) {
+          el.value = id === 'sale-down'
+            ? '0'
+            : id === 'sale-n'
+              ? '1'
+              : id === 'sale-due'
+                ? String(defaultDueDay())
+                : id === 'sale-first-month'
+                  ? String(defaultFirstDueMonthOffset())
+                  : '';
+        }
       });
       document.getElementById('sale-date').value = todayStr();
       updateSalePreview();
     });
-    ['sale-total','sale-down','sale-n','sale-due'].forEach((id) => {
+    ['sale-date','sale-total','sale-down','sale-n','sale-due','sale-first-month'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('input', updateSalePreview);
+      if (el) el.addEventListener('change', updateSalePreview);
     });
     const custIdEl = document.getElementById('sale-cust-id');
     if (custIdEl) {
@@ -1777,7 +1815,7 @@
     state.isSavingSale = true;
     try {
       if (saleRoot) {
-        saleRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+        saleRoot.querySelectorAll('input, textarea, select, button').forEach((el) => {
           el.disabled = true;
         });
       }
@@ -1804,6 +1842,7 @@
       const down = Number.isFinite(downRaw) ? Math.max(0, downRaw) : 0;
       const nInstRaw = parseInt(document.getElementById('sale-n').value || '1', 10);
       const dueDay = parseInt(document.getElementById('sale-due').value || '1', 10);
+      const firstDueMonthOffset = parseFirstDueMonthOffset(document.getElementById('sale-first-month')?.value || '1');
       const totalCents = Math.round(Math.max(0, total) * 100);
       const downCents = Math.round(Math.max(0, down) * 100);
       const isFullyPaid = totalCents > 0 && downCents >= totalCents;
@@ -1838,8 +1877,7 @@
       if (nInst > 0 && remaining > 0) {
         const instAmt = Math.round((remaining / nInst) * 100) / 100;
         for (let i = 1; i <= nInst; i++) {
-          const d = new Date(saleBase.getFullYear(), saleBase.getMonth() + i, 1);
-          d.setDate(Math.min(dueDay, 28));
+          const d = calculateInstallmentDueDate(saleBase, dueDay, i, firstDueMonthOffset);
           const dueIso = formatISODate(d);
           const inst = {
             sale_id: saleId,
@@ -1906,7 +1944,7 @@
       state.isSavingSale = false;
       if (saveBtn) saveBtn.innerHTML = prevSaveHtml || 'KAYDET';
       if (saleRoot) {
-        saleRoot.querySelectorAll('input, textarea, button').forEach((el) => {
+        saleRoot.querySelectorAll('input, textarea, select, button').forEach((el) => {
           el.disabled = false;
         });
       }
@@ -1923,6 +1961,7 @@
     const downEl = document.getElementById('sale-down');
     const nEl = document.getElementById('sale-n');
     const dueEl = document.getElementById('sale-due');
+    const firstMonthEl = document.getElementById('sale-first-month');
 
     const total = parseFloat(totalEl?.value || '0');
     const down = parseFloat(downEl?.value || '0');
@@ -1945,9 +1984,11 @@
     }
 
     if (dueEl) dueEl.disabled = isFullyPaid;
+    if (firstMonthEl) firstMonthEl.disabled = isFullyPaid;
 
     const nInst = parseInt(nEl?.value || '1', 10);
     const dueDay = parseInt(dueEl?.value || '1', 10);
+    const firstDueMonthOffset = parseFirstDueMonthOffset(firstMonthEl?.value || '1');
     const saleDate = toISO(document.getElementById('sale-date')?.value || todayStr());
     const base = parseISODate(saleDate);
     const remainingCents = isFullyPaid ? 0 : Math.max(0, totalCents - downCents);
@@ -1961,8 +2002,7 @@
       if (!hasInstallments || !base || !isFinite(dueDay)) {
         dateEl.textContent = '—';
       } else {
-        const d = new Date(base.getFullYear(), base.getMonth() + nInst, 1);
-        d.setDate(Math.min(dueDay, 28));
+        const d = calculateInstallmentDueDate(base, dueDay, nInst, firstDueMonthOffset);
         dateEl.textContent = fromISO(formatISODate(d));
       }
     }
