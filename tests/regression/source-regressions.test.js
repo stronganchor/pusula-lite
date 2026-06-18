@@ -256,6 +256,22 @@ test('main-page customer-info navigation ignores stale selected-customer fetches
   assert.match(editHandler, /activateTab\('add'\)/);
 });
 
+test('customer info tab refills after selecting a different customer from search', () => {
+  const activateTab = extractBlock(appSource, 'function activateTab');
+  const addTabBranch = sliceBetween(
+    activateTab,
+    "if (tabName === 'add') {",
+    "if (tabName === 'sale') {"
+  );
+  const fillCustomerForm = extractBlock(appSource, 'function fillCustomerForm');
+
+  assert.match(addTabBranch, /const selectedId\s*=\s*customerIdOf\(state\.selected\);/);
+  assert.match(addTabBranch, /const formMatchesSelected\s*=\s*selectedId && state\.addFormCustomerId === selectedId;/);
+  assert.match(addTabBranch, /if \(!formMatchesSelected \|\| !isAddFormDirty\(\)\) fillCustomerForm\(state\.selected\);/);
+  assert.match(fillCustomerForm, /state\.addFormCustomerId\s*=\s*null;/);
+  assert.match(fillCustomerForm, /state\.addFormCustomerId\s*=\s*customerIdOf\(cust\);/);
+});
+
 test('detail sales responses are ignored after customer selection changes', () => {
   const loadSales = extractBlock(appSource, 'async function loadSales');
 

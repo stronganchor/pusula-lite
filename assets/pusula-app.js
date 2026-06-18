@@ -13,6 +13,7 @@
     selected: null,
     selectionSeq: 0,
     pendingCustomerId: null,
+    addFormCustomerId: null,
     currentSaleExplicit: false,
     sales: [],
     salesLoadSeq: 0,
@@ -854,7 +855,9 @@
 
     if (tabName === 'add') {
       if (state.selected) {
-        if (!isAddFormDirty()) fillCustomerForm(state.selected);
+        const selectedId = customerIdOf(state.selected);
+        const formMatchesSelected = selectedId && state.addFormCustomerId === selectedId;
+        if (!formMatchesSelected || !isAddFormDirty()) fillCustomerForm(state.selected);
       } else if (!isAddFormDirty()) {
         fillCustomerForm();
       }
@@ -1485,6 +1488,7 @@
     };
     if (!cust) {
       setSelectedCustomer(null);
+      state.addFormCustomerId = null;
       ['cust-id','cust-name','cust-phone','cust-address','cust-work','cust-notes','c1-name','c1-phone','c1-home','c1-work','c2-name','c2-phone','c2-home','c2-work'].forEach((id) => set(id, ''));
       const localNext = nextCustomerId();
       set('cust-id', String(localNext));
@@ -1495,6 +1499,7 @@
       return;
     }
     setSelectedCustomer(cust);
+    state.addFormCustomerId = customerIdOf(cust);
     set('cust-id', cust.id || '');
     set('cust-date-label', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
     set('cust-date-hidden', cust.registration_date ? fromISO(cust.registration_date) : todayStr());
