@@ -6,6 +6,7 @@ const test = require('node:test');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const apiSource = fs.readFileSync(path.join(repoRoot, 'pusula-lite-api.php'), 'utf8');
 const appSource = fs.readFileSync(path.join(repoRoot, 'assets', 'pusula-app.js'), 'utf8');
+const exporterSource = fs.readFileSync(path.join(repoRoot, 'tools', 'pusula-desktop-export.php'), 'utf8');
 
 function extractBlock(source, marker) {
   const markerIndex = source.indexOf(marker);
@@ -34,6 +35,71 @@ function sliceBetween(source, startMarker, endMarker) {
   assert.notEqual(end, -1, `Missing end marker: ${endMarker}`);
   return source.slice(start, end);
 }
+
+function assertMarkersInOrder(source, markers) {
+  let cursor = -1;
+  markers.forEach((marker) => {
+    const index = source.indexOf(marker, cursor + 1);
+    assert.notEqual(index, -1, `Missing marker: ${marker}`);
+    assert.ok(index > cursor, `Marker is out of order: ${marker}`);
+    cursor = index;
+  });
+}
+
+test('desktop exporter declares the exact ordered import bundle fields', () => {
+  const buildBundle = extractBlock(exporterSource, 'public function build_bundle');
+
+  assertMarkersInOrder(buildBundle, [
+    "'format_version'",
+    "'source'",
+    "'source_version'",
+    "'exported_at'",
+    "'business_profile'",
+    "'customers'",
+    "'contacts'",
+    "'sales'",
+    "'installments'",
+    "'payments'",
+    "'manifest'",
+  ]);
+  assertMarkersInOrder(extractBlock(exporterSource, 'private function read_customers'), [
+    "'id'", "'name'", "'phone'", "'address'", "'work_address'", "'notes'", "'registration_date'",
+  ]);
+  assertMarkersInOrder(extractBlock(exporterSource, 'private function read_contacts'), [
+    "'id'", "'customer_id'", "'name'", "'phone'", "'home_address'", "'work_address'",
+  ]);
+  assertMarkersInOrder(extractBlock(exporterSource, 'private function read_sales'), [
+    "'id'", "'customer_id'", "'date'", "'total_kurus'", "'description'", "'request_key'",
+  ]);
+  assertMarkersInOrder(extractBlock(exporterSource, 'private function read_installments'), [
+    "'id'", "'sale_id'", "'due_date'", "'amount_kurus'", "'paid_date'",
+  ]);
+  assertMarkersInOrder(extractBlock(exporterSource, 'private function read_payments'), [
+    "'id'", "'installment_id'", "'amount_kurus'", "'payment_date'", "'created_at'",
+  ]);
+});
+
+test('desktop exporter hashes a compact bundle with an empty sha256 field', () => {
+  const buildBundle = extractBlock(exporterSource, 'public function build_bundle');
+  const encodeJson = extractBlock(exporterSource, 'public function encode_json');
+
+  assert.match(buildBundle, /'sha256'\s*=>\s*''/);
+  assert.match(buildBundle, /hash\(\s*'sha256',\s*\$this->encode_json\(\s*\$bundle,\s*false\s*\)\s*\)/);
+  assert.match(encodeJson, /JSON_UNESCAPED_SLASHES\s*\|\s*JSON_UNESCAPED_UNICODE/);
+  assert.match(exporterSource, /START TRANSACTION WITH CONSISTENT SNAPSHOT/);
+  assert.match(exporterSource, /ORDER BY id ASC/);
+});
+
+test('desktop exporter is opt-in, excludes unrelated data, and protects output', () => {
+  assert.doesNotMatch(apiSource, /pusula-desktop-export\.php/);
+  assert.match(exporterSource, /WP_CLI::add_command\(\s*'pusula desktop-export'/);
+  assert.match(exporterSource, /\[--dry-run\]/);
+  assert.match(exporterSource, /\[--force\]/);
+  assert.match(exporterSource, /file_exists\(\s*\$output\s*\)\s*&&\s*!\s*\$force/);
+  assert.match(exporterSource, /tempnam\(/);
+  assert.doesNotMatch(exporterSource, /read_rows\(\s*'locks'/);
+  assert.doesNotMatch(exporterSource, /wp_users|\$wpdb->users|pusula_lite_api_key/);
+});
 
 test('REST route map exposes the main plugin surfaces', () => {
   const routes = extractBlock(apiSource, 'public function register_routes');

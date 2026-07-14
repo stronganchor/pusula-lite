@@ -9,10 +9,13 @@ Run the fast source regression suite from the repo root:
 This checks:
 
 - PHP syntax for `pusula-lite-api.php`
+- PHP syntax and fixture-based functional tests for the one-time desktop exporter
 - JavaScript syntax for `assets/pusula-app.js`
 - route, auth, customer, sale, installment, payment create/delete, lock,
   report, expected-payment, offline snapshot, offline filter, and stale
   navigation source regressions
+- desktop export field ordering, checksum, relationship validation, exact kuruş
+  conversion, atomic writes, and overwrite protection
 - `git diff --check`
 
 Run this suite and update it when making plugin behavior changes. In particular,
